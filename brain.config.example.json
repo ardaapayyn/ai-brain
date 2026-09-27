@@ -1,0 +1,47 @@
+{
+  "port": 7777,
+  "dataDir": "~/.ai-brain",
+  "llm": {
+    "active": "ollama",
+    "fallbacks": [],
+    "providers": {
+      "ollama": {
+        "type": "ollama",
+        "baseUrl": "http://127.0.0.1:11434",
+        "model": "qwen3-coder:30b",
+        "contextTokens": 32768,
+        "temperature": 0.2,
+        "keepAlive": "30m"
+      },
+      "ollama-fast": {
+        "type": "ollama",
+        "baseUrl": "http://127.0.0.1:11434",
+        "model": "qwen3:8b",
+        "contextTokens": 16384
+      },
+      "llama-cpp": {
+        "type": "openai",
+        "baseUrl": "http://127.0.0.1:8080/v1",
+        "model": "local",
+        "contextTokens": 32768
+      },
+      "cloud-example": {
+        "type": "openai",
+        "baseUrl": "https://api.example.com/v1",
+        "model": "some-model",
+        "apiKeyEnv": "CLOUD_API_KEY",
+        "contextTokens": 128000
+      }
+    }
+  },
+  "approvals": {
+    "fileWrite": "auto",
+    "fileDelete": "ask",
+    "shell": "ask-risky",
+    "tests": "auto",
+    "git": "ask",
+    "network": "auto"
+  },
+  "agent": { "maxSteps": 40, "requireVerification": true },
+  "shell": { "timeoutMs": 300000, "windows": "default" }
+}
