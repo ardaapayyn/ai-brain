@@ -34,7 +34,9 @@ function openBrowser(url) {
   opened = true;
   const cmd = isWin ? ['cmd', ['/c', 'start', '', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
   try {
-    spawn(cmd[0], cmd[1], { stdio: 'ignore', detached: true }).unref();
+    const child = spawn(cmd[0], cmd[1], { stdio: 'ignore', detached: true });
+    child.on('error', () => console.log(`Apri il browser su ${url}`));
+    child.unref();
   } catch {
     /* no browser available */
   }

@@ -1,5 +1,5 @@
 import type { ProviderConfig } from '../config.js';
-import type { ChatMessage, ChatRequest, ChatResponse, LLMProvider, ProviderHealth, ToolCall } from './types.js';
+import type { ChatMessage, ChatRequest, ChatResponse, LLMProvider, ProviderHealth, PullProgress, ToolCall } from './types.js';
 import { callId, extractTextToolCalls, parseArgs, providerFetch, readLines, splitThinking } from './util.js';
 
 /** Native Ollama provider (/api/chat, streaming NDJSON, structured tool calls). */
@@ -84,6 +84,25 @@ export class OllamaProvider implements LLMProvider {
       if (parsed.calls.length) return { content: parsed.rest, thinking, toolCalls: parsed.calls, usage };
     }
     return { content, thinking: thinking || undefined, toolCalls, usage };
+  }
+
+  async pull(model: string, onProgress: (p: PullProgress) => void, signal?: AbortSignal): Promise<void> {
+    const res = await providerFetch(this.id, `${this.base}/api/pull`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, stream: true }),
+      signal,
+    });
+    for await (const line of readLines(res.body!)) {
+      let chunk: any;
+      try {
+        chunk = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (chunk.error) throw new Error(chunk.error);
+      onProgress({ status: chunk.status ?? '', completed: chunk.completed, total: chunk.total });
+    }
   }
 
   async listModels(): Promise<string[]> {

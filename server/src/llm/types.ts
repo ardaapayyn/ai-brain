@@ -70,6 +70,14 @@ export interface LLMProvider {
   chat(req: ChatRequest): Promise<ChatResponse>;
   health(): Promise<ProviderHealth>;
   listModels(): Promise<string[]>;
+  /** Download a model (runtimes that support it, e.g. Ollama). */
+  pull?(model: string, onProgress: (p: PullProgress) => void, signal?: AbortSignal): Promise<void>;
+}
+
+export interface PullProgress {
+  status: string;
+  completed?: number;
+  total?: number;
 }
 
 /** Thrown when the provider cannot be reached at all (eligible for fallback). */

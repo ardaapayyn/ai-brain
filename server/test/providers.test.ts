@@ -109,3 +109,32 @@ test('Router falls back when the active provider is unreachable', async () => {
   assert.equal(r.content, 'from fallback');
   assert.equal(router.lastServedBy, 'backup');
 });
+
+test('Ollama provider: model pull streams progress and surfaces errors', async () => {
+  const s = await serve((_req, body, res) => {
+    if (body.model === 'bad') {
+      res.end(JSON.stringify({ error: 'pull model manifest: file does not exist' }) + '\n');
+      return;
+    }
+    res.write(JSON.stringify({ status: 'pulling manifest' }) + '\n');
+    res.write(JSON.stringify({ status: 'downloading', completed: 50, total: 100 }) + '\n');
+    res.end(JSON.stringify({ status: 'success' }) + '\n');
+  });
+  const p = new OllamaProvider('ollama', { type: 'ollama', baseUrl: s.url, model: 'm' });
+  const seen: any[] = [];
+  await p.pull('qwen3:8b', (x) => seen.push(x));
+  assert.deepEqual(seen.map((x) => x.status), ['pulling manifest', 'downloading', 'success']);
+  assert.equal(seen[1].completed, 50);
+  await assert.rejects(p.pull('bad', () => {}), /does not exist/);
+  s.close();
+});
+
+test('hardware recommendation matches the reference PC', async () => {
+  const { recommend } = await import('../src/system.js');
+  const r = recommend(64, 8);
+  assert.equal(r.main, 'qwen3-coder:30b');
+  assert.equal(r.fast, 'qwen3:8b');
+  assert.equal(r.contextTokens, 32768);
+  assert.equal(recommend(16, 4).main, 'qwen3:8b');
+  assert.equal(recommend(8, 0).main, 'qwen3:4b');
+});

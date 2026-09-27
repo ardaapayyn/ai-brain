@@ -2,7 +2,7 @@
   "name": "ai-brain",
   "version": "0.1.0",
   "private": true,
-  "description": "Personal AI OS — a fully local 3D AI brain with an autonomous coding agent.",
+  "description": "Personal AI OS \u2014 a fully local 3D AI brain with an autonomous coding agent.",
   "type": "module",
   "workspaces": [
     "server",
@@ -17,6 +17,7 @@
     "start": "node server/dist/index.js",
     "test": "npm test -w server",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
-    "doctor": "node scripts/doctor.mjs"
+    "doctor": "node scripts/doctor.mjs",
+    "setup": "node scripts/setup.mjs"
   }
 }

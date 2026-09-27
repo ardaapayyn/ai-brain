@@ -79,4 +79,13 @@ export class LLMRouter implements LLMProvider {
   listModels(): Promise<string[]> {
     return this.active.listModels();
   }
+
+  get canPull() {
+    return typeof this.active.pull === 'function';
+  }
+
+  pull(model: string, onProgress: Parameters<NonNullable<LLMProvider['pull']>>[1], signal?: AbortSignal) {
+    if (!this.active.pull) throw new Error(`${this.active.id} cannot download models — use its own tooling`);
+    return this.active.pull(model, onProgress, signal);
+  }
 }

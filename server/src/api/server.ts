@@ -8,6 +8,7 @@ import type { LLMRouter } from '../llm/router.js';
 import type { MemoryKind, MemoryStore } from '../memory/store.js';
 import type { Orchestrator } from '../agent/orchestrator.js';
 import { renderOverview } from '../workspace/indexer.js';
+import { systemInfo } from '../system.js';
 import { buildGraph } from './graph.js';
 
 export interface ServerDeps {
@@ -68,6 +69,30 @@ export function createServer(deps: ServerDeps) {
       pendingApprovals: orchestrator.approvals.list(),
       platform: process.platform,
     };
+  });
+
+  route('GET', '/api/system', () => systemInfo());
+
+  // In-app model download with live progress (model.pull events).
+  const pulling = new Set<string>();
+  route('POST', '/api/models/pull', (_r, _p, body) => {
+    const model = String(body?.model ?? '').trim();
+    if (!/^[\w.\-/:]+$/.test(model)) throw new HttpError(400, 'Invalid model name');
+    if (!llm.canPull) throw new HttpError(400, `The active provider (${config.llm.active}) cannot download models`);
+    if (pulling.has(model)) return { started: false, alreadyRunning: true };
+    pulling.add(model);
+    let last = 0;
+    llm
+      .pull(model, (p) => {
+        const now = Date.now();
+        if (now - last < 250 && p.completed !== p.total) return; // throttle progress events
+        last = now;
+        bus.emitEvent({ type: 'model.pull', model, status: p.status, completed: p.completed, total: p.total });
+      })
+      .then(() => bus.emitEvent({ type: 'model.pull', model, status: 'success', done: true }))
+      .catch((err) => bus.emitEvent({ type: 'model.pull', model, status: 'error', done: true, error: err.message }))
+      .finally(() => pulling.delete(model));
+    return { started: true };
   });
 
   route('GET', '/api/models', async () => {

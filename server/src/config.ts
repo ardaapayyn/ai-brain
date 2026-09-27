@@ -55,6 +55,13 @@ export interface BrainConfig {
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(here, '..', '..');
 
+/** Honors OLLAMA_HOST like the Ollama CLI does (e.g. "127.0.0.1:11434" or "http://host:port"). */
+function ollamaBaseUrl(): string {
+  const h = process.env.OLLAMA_HOST;
+  if (!h) return 'http://127.0.0.1:11434';
+  return (/^https?:\/\//.test(h) ? h : `http://${h}`).replace(/\/+$/, '').replace('://0.0.0.0', '://127.0.0.1');
+}
+
 export function defaultConfig(): BrainConfig {
   return {
     host: '127.0.0.1',
@@ -66,7 +73,7 @@ export function defaultConfig(): BrainConfig {
       providers: {
         ollama: {
           type: 'ollama',
-          baseUrl: 'http://127.0.0.1:11434',
+          baseUrl: ollamaBaseUrl(),
           model: 'qwen3-coder:30b',
           contextTokens: 32768,
           temperature: 0.2,
@@ -74,7 +81,7 @@ export function defaultConfig(): BrainConfig {
         },
         'ollama-fast': {
           type: 'ollama',
-          baseUrl: 'http://127.0.0.1:11434',
+          baseUrl: ollamaBaseUrl(),
           model: 'qwen3:8b',
           contextTokens: 16384,
           temperature: 0.2,

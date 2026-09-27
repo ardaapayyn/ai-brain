@@ -17,7 +17,8 @@ export type BrainEvent =
   | { type: 'run.finished'; runId: string; taskId: string; status: 'done' | 'failed' | 'cancelled'; summary: string; filesTouched: string[] }
   | { type: 'memory.added'; id: string; projectId: string | null; kind: string; text: string }
   | { type: 'graph.changed' }
-  | { type: 'llm.fallback'; runId: string; from: string; to: string };
+  | { type: 'llm.fallback'; runId: string; from: string; to: string }
+  | { type: 'model.pull'; model: string; status: string; completed?: number; total?: number; done?: boolean; error?: string };
 
 export class EventBus extends EventEmitter {
   emitEvent(e: BrainEvent) {
