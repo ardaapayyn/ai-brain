@@ -9,8 +9,8 @@ Un cervello digitale 3D che gira **interamente sul tuo PC**: migliaia di neuroni
 | ![intro](docs/images/brain-intro.png) | ![welcome](docs/images/brain-welcome.png) |
 | **Suggerimenti e nucleo** | **Conferma prima di un'azione rischiosa** |
 | ![idle](docs/images/brain-idle.png) | ![approval](docs/images/brain-approval.png) |
-| **Impostazioni (modelli consigliati per il tuo PC)** | |
-| ![settings](docs/images/brain-settings.png) | |
+| **Impostazioni (modelli consigliati per il tuo PC)** | **Aggiungi progetti (selezione multipla)** |
+| ![settings](docs/images/brain-settings.png) | ![picker](docs/images/picker.png) |
 
 ---
 
