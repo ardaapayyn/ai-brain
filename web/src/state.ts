@@ -1,5 +1,6 @@
 import type { Approval, BrainEvent, Graph, PlanStep, Project, Status } from './types';
 import type { Theme } from './scene/palette';
+import { prefs } from './prefs';
 
 export type TimelineItem =
   | { kind: 'thought'; text: string; streaming: boolean }
@@ -139,18 +140,8 @@ export interface AppState {
   selectedNode?: string;
 }
 
-function initialTheme(): Theme {
-  try {
-    const t = localStorage.getItem('brain.theme');
-    if (t === 'light' || t === 'dark') return t;
-  } catch {
-    /* storage unavailable */
-  }
-  return 'dark'; // the brain is designed black-first; light mode is one click (or T) away
-}
-
 export const state: AppState = {
-  theme: initialTheme(),
+  theme: prefs.theme,
   connected: false,
   projects: [],
   projectId: null,

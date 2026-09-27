@@ -90,6 +90,15 @@ export interface Status {
   platform: string;
 }
 
+export interface SystemInfo {
+  platform: string;
+  cpu: string;
+  cores: number;
+  ramGB: number;
+  gpus: { name: string; vramGB?: number; vendor: string }[];
+  recommendation: { main: string; fast?: string; contextTokens: number; reason: string };
+}
+
 export type ApprovalPolicy = 'auto' | 'ask' | 'ask-risky';
 
 export interface Settings {
@@ -114,4 +123,5 @@ export type BrainEvent =
   | { type: 'run.finished'; runId: string; taskId: string; status: 'done' | 'failed' | 'cancelled'; summary: string; filesTouched: string[] }
   | { type: 'memory.added'; id: string; projectId: string | null; kind: string; text: string }
   | { type: 'graph.changed' }
-  | { type: 'llm.fallback'; runId: string; from: string; to: string };
+  | { type: 'llm.fallback'; runId: string; from: string; to: string }
+  | { type: 'model.pull'; model: string; status: string; completed?: number; total?: number; done?: boolean; error?: string };

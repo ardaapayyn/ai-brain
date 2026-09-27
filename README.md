@@ -4,9 +4,13 @@ Un cervello digitale 3D che gira **interamente sul tuo PC**: migliaia di neuroni
 
 ![AI Brain al lavoro](docs/images/brain-working.png)
 
-| Idle | Conferma prima di un'azione rischiosa |
+| Intro | Benvenuto |
 |---|---|
+| ![intro](docs/images/brain-intro.png) | ![welcome](docs/images/brain-welcome.png) |
+| **Suggerimenti e nucleo** | **Conferma prima di un'azione rischiosa** |
 | ![idle](docs/images/brain-idle.png) | ![approval](docs/images/brain-approval.png) |
+| **Impostazioni (modelli consigliati per il tuo PC)** | |
+| ![settings](docs/images/brain-settings.png) | |
 
 ---
 
@@ -47,33 +51,42 @@ Un cervello digitale 3D che gira **interamente sul tuo PC**: migliaia di neuroni
 > ```powershell
 > Rename-Item "$env:LOCALAPPDATA\Programs\Ollama\lib\ollama\vulkan\vulkan-1.dll" "vulkan-1.dll.bak"
 > ```
-> In alternativa usa la build Vulkan di llama.cpp (vedi sotto).
+> `AI-Brain.bat` lo controlla e lo corregge da solo. In alternativa usa la build Vulkan di llama.cpp (vedi sotto).
 
 ---
 
-## Installazione (Windows)
+## Avvio in un doppio click (Windows)
 
-1. **Node.js 22 LTS** — https://nodejs.org · **Git** — https://git-scm.com
-   Consigliato: **ripgrep** per ricerche veloci → `winget install BurntSushi.ripgrep.MSVC`
-2. **Ollama** — https://ollama.com/download, poi in un terminale:
-   ```powershell
-   ollama pull qwen3-coder:30b
-   ollama pull qwen3:8b          # opzionale, modello veloce
-   ```
-   Opzionale ma utile per risparmiare memoria del contesto (variabili d'ambiente di sistema, poi riavvia Ollama):
-   `OLLAMA_FLASH_ATTENTION=1` e `OLLAMA_KV_CACHE_TYPE=q8_0`.
-3. **AI Brain**
-   ```powershell
-   git clone <questo repo> ai-brain
-   cd ai-brain
-   npm install
-   npm run doctor     # verifica Node, git, ripgrep, Ollama, modello, uso GPU
-   ```
-4. **Avvio**
-   - sviluppo (hot reload): `npm run dev` → si apre http://127.0.0.1:5173
-   - uso quotidiano: doppio click su **`AI-Brain.cmd`** (compila la prima volta e apre http://127.0.0.1:7777), oppure `npm run build && npm start`
+1. Scarica/clona questa cartella.
+2. Doppio click su **`AI-Brain.bat`**. Fine.
 
-Funziona anche su Linux/macOS con gli stessi comandi.
+Al primo avvio fa tutto da solo, mostrando ogni passo con barre di progresso:
+
+| Passo | Cosa fa |
+|---|---|
+| Hardware | rileva CPU, RAM e GPU (con la **VRAM reale**, letta dal driver) |
+| Modelli | sceglie i modelli migliori per il tuo PC (per il tuo: `qwen3-coder:30b` + `qwen3:8b`, contesto 32K) e scrive `brain.config.json` |
+| Strumenti | installa **Node.js LTS**, **Git** e **ripgrep** con `winget` se mancano |
+| Motore AI | installa **Ollama** se manca, lo avvia (con flash‑attention e KV cache compressa) |
+| Download | scarica i modelli con barra di avanzamento, velocità ed ETA (riprende se si interrompe) |
+| GPU | carica il modello e misura quanta parte sta in VRAM; con **GPU AMD** applica da solo la correzione nota di Ollama/Vulkan se serve (e la annulla se non aiuta) |
+| App | installa le dipendenze e ricompila **solo se qualcosa è cambiato** |
+| Avvio | avvia il server e apre il cervello nel browser |
+
+Dal secondo avvio impiega pochi secondi. Lascia aperta la finestra (Ctrl+C per spegnere); se AI Brain è già acceso, il `.bat` apre solo il browser.
+
+Opzioni: `AI-Brain.bat --reconfigure` (ricalcola i modelli per l'hardware), `--no-pull`, `--no-gpu-check`, `--port 7777`.
+Linux/macOS: `./start.sh` (stessa logica). Diagnosi: `npm run doctor`.
+
+I modelli si possono cambiare e scaricare anche **dall'app**: Impostazioni → Modello (con barra di progresso), oppure il pulsante *Scarica ora* che compare se il modello scelto non c'è.
+
+### Avvio manuale / sviluppo
+```powershell
+npm install
+npm run setup -- --no-launch   # rileva hardware, scarica modelli, compila
+npm start                      # http://127.0.0.1:7777
+npm run dev                    # sviluppo con hot reload → http://127.0.0.1:5173
+```
 
 ### Usare llama.cpp invece di Ollama
 Scarica una release di llama.cpp *win-vulkan*, poi ad esempio:
@@ -92,7 +105,9 @@ e in **Impostazioni → Provider** scegli `llama-cpp` (oppure `"active": "llama-
 4. Se l'agente vuole fare qualcosa di rischioso compare una **richiesta di conferma** (Nega / Consenti / Consenti per questa esecuzione).
 5. Alla fine trovi il **report** con file modificati e verifica eseguita. **↶ Annulla modifiche** ripristina i file; **↳ Continua questo task** manda un follow‑up con il contesto del task.
 
-**Comandi:** trascina = ruota · scroll = zoom · click su nodo = entra · doppio click sul vuoto = torna · `/` = scrivi · `Esc` = chiudi · `T` = tema.
+**Comandi:** trascina = ruota · scroll = zoom · click su nodo = entra · doppio click sul vuoto = torna · `/` = scrivi · `Ctrl K` = cerca/comandi · `Esc` = chiudi · `T` = tema · `?` = scorciatoie. Sulle conferme: `Y` consenti · `N` nega · `A` consenti per tutta l'esecuzione (le azioni distruttive si confermano solo col click).
+
+**Interfaccia:** intro in cui il cervello si assembla, legenda cliccabile per mostrare/nascondere tipi di nodi, tooltip sui nodi, focus sul vicinato del nodo selezionato, onde d'urto quando un task parte o finisce, nucleo con anelli che accelerano quando l'AI lavora, token/s e grafico dell'attività in tempo reale, command palette, suggerimenti di prompt, qualità grafica regolabile (Alta/Media/Bassa) e animazioni ridotte.
 
 **Autonomia** (Impostazioni): per ogni classe di azione scegli `auto`, `chiedi` o `solo rischiosi`. Default: modifiche ai file automatiche (annullabili), eliminazioni e commit su conferma, terminale su conferma tranne build/test/comandi di sola lettura, test automatici.
 
@@ -149,7 +164,7 @@ Tutto in `~/.ai-brain` (configurabile): `brain.json` (progetti, task, ricordi, e
 ## Sviluppo
 
 ```bash
-npm test            # 26 test: unità, provider (server Ollama/OpenAI finti), agente end-to-end, API/WebSocket
+npm test            # 28 test: unità, provider (server Ollama/OpenAI finti), agente end-to-end, API/WebSocket
 npm run typecheck
 npm run build
 ```

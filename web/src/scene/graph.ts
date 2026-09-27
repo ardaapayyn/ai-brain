@@ -49,11 +49,13 @@ const EDGE_VERT = /* glsl */ `
   attribute vec3 aColor;
   attribute float aT;
   attribute float aActive;
+  attribute float aVis;
   varying vec3 vColor;
   varying float vT;
   varying float vActive;
+  varying float vVis;
   void main() {
-    vColor = aColor; vT = aT; vActive = aActive;
+    vColor = aColor; vT = aT; vActive = aActive; vVis = aVis;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -64,9 +66,10 @@ const EDGE_FRAG = /* glsl */ `
   varying vec3 vColor;
   varying float vT;
   varying float vActive;
+  varying float vVis;
   void main() {
     float flow = vActive * smoothstep(0.3, 0.0, abs(fract(vT - uTime * 0.9) - 0.5));
-    float a = mix(0.22, 0.5, uLight) + flow * 0.7;
+    float a = (mix(0.22, 0.5, uLight) + flow * 0.7 + vActive * 0.12) * vVis;
     gl_FragColor = vec4(mix(vColor, vec3(1.0), flow * 0.5 * (1.0 - uLight)), a);
   }
 `;
@@ -118,6 +121,9 @@ export class GraphLayer {
   hovered?: string;
   selected?: string;
   private activeEdges = new Set<string>();
+  private hidden = new Set<string>();
+  private focusFor?: string;
+  private focusSet?: Set<string>;
 
   constructor(private labelsEl: HTMLElement, pixelRatio: number, theme: Theme) {
     this.theme = theme;
@@ -140,6 +146,7 @@ export class GraphLayer {
     this.edgeGeo.setAttribute('aColor', eAttr(3));
     this.edgeGeo.setAttribute('aT', eAttr(1));
     this.edgeGeo.setAttribute('aActive', eAttr(1));
+    this.edgeGeo.setAttribute('aVis', eAttr(1));
     this.edgeGeo.setDrawRange(0, 0);
     this.edgeMat = new THREE.ShaderMaterial({ uniforms, vertexShader: EDGE_VERT, fragmentShader: EDGE_FRAG, transparent: true, depthWrite: false });
     const lines = new THREE.LineSegments(this.edgeGeo, this.edgeMat);
@@ -205,6 +212,7 @@ export class GraphLayer {
     this.order = [...this.views.values()];
     this.order.forEach((v, i) => (v.index = i));
     this.edges = g.edges.filter(([a, b]) => this.views.has(a) && this.views.has(b)).slice(0, MAX_EDGES);
+    this.focusFor = undefined;
     const seed = this.nodeGeo.getAttribute('aSeed') as THREE.BufferAttribute;
     for (const v of this.order) seed.setX(v.index, hash(v.node.id));
     seed.needsUpdate = true;
@@ -263,6 +271,39 @@ export class GraphLayer {
     return out;
   }
 
+  /** Hide whole node types (legend toggles). */
+  setHidden(types: Iterable<string>) {
+    this.hidden = new Set(types);
+  }
+
+  counts(): Record<string, number> {
+    const c: Record<string, number> = {};
+    for (const v of this.order) c[v.node.type] = (c[v.node.type] ?? 0) + 1;
+    return c;
+  }
+
+  /** Selected node + its direct neighbours + ancestors stay bright; the rest dims. */
+  private focus(): Set<string> | undefined {
+    if (!this.selected || this.selected === 'core') return undefined;
+    if (this.focusFor === this.selected && this.focusSet) return this.focusSet;
+    const set = new Set<string>([this.selected, 'core']);
+    for (const [a, b] of this.edges) {
+      if (a === this.selected) set.add(b);
+      if (b === this.selected) set.add(a);
+    }
+    let p = this.views.get(this.selected)?.node.parent;
+    while (p && !set.has(p + '#')) {
+      set.add(p);
+      set.add(p + '#');
+      p = this.views.get(p)?.node.parent;
+    }
+    // entering a project keeps its whole cluster lit
+    for (const v of this.order) if (v.node.parent && set.has(v.node.parent) && this.views.get(this.selected)?.node.type === 'project') set.add(v.node.id);
+    this.focusFor = this.selected;
+    this.focusSet = set;
+    return set;
+  }
+
   /** Light up edges on the path to a node (e.g. the task being worked on). */
   setActivePath(ids: string[]) {
     this.activeEdges.clear();
@@ -278,7 +319,9 @@ export class GraphLayer {
     const alpha = this.nodeGeo.getAttribute('aAlpha') as THREE.BufferAttribute;
     const k = 1 - Math.pow(0.02, dt); // frame-rate independent easing
     const v3 = new THREE.Vector3();
+    const focus = this.focus();
     for (const v of this.order) {
+      v.targetAlpha = this.hidden.has(v.node.type) ? 0 : focus && !focus.has(v.node.id) ? 0.28 : 1;
       v.pos.lerp(v.target, k * 0.9);
       v.alpha += (v.targetAlpha - v.alpha) * k;
       const i = v.index;
@@ -299,9 +342,14 @@ export class GraphLayer {
     const ec = this.edgeGeo.getAttribute('aColor') as THREE.BufferAttribute;
     const et = this.edgeGeo.getAttribute('aT') as THREE.BufferAttribute;
     const ea = this.edgeGeo.getAttribute('aActive') as THREE.BufferAttribute;
+    const ev = this.edgeGeo.getAttribute('aVis') as THREE.BufferAttribute;
     this.edges.forEach(([a, b], i) => {
       const va = this.views.get(a)!, vb = this.views.get(b)!;
-      const active = this.activeEdges.has(`${a}|${b}`) ? 1 : 0;
+      const touches = !!this.selected && (a === this.selected || b === this.selected);
+      const active = this.activeEdges.has(`${a}|${b}`) ? 1 : touches ? 0.6 : 0;
+      const vis = Math.min(va.alpha, vb.alpha) * (focus && !touches ? 0.5 : 1);
+      ev.setX(i * 2, vis);
+      ev.setX(i * 2 + 1, vis);
       ep.setXYZ(i * 2, va.pos.x, va.pos.y, va.pos.z);
       ep.setXYZ(i * 2 + 1, vb.pos.x, vb.pos.y, vb.pos.z);
       ec.setXYZ(i * 2, va.color.r, va.color.g, va.color.b);
@@ -312,7 +360,7 @@ export class GraphLayer {
       ea.setX(i * 2, active);
       ea.setX(i * 2 + 1, active);
     });
-    for (const a of [ep, ec, et, ea]) a.needsUpdate = true;
+    for (const a of [ep, ec, et, ea, ev]) a.needsUpdate = true;
     this.updateLabels(camera);
   }
 
@@ -323,7 +371,7 @@ export class GraphLayer {
       const dist = camPos.distanceTo(v.pos);
       const important = n.type === 'core' || n.type === 'project' || n.id === this.hovered || n.id === this.selected || n.status === 'running';
       const near = n.type === 'tool' ? dist < 260 : n.type === 'module' || n.type === 'task' ? dist < 170 : dist < 110;
-      const show = v.screen.visible && v.alpha > 0.3 && (important || near);
+      const show = v.screen.visible && v.alpha > 0.55 && (important || near);
       if (!show) {
         if (v.label) v.label.style.opacity = '0';
         continue;
@@ -349,7 +397,7 @@ export class GraphLayer {
     let best: string | undefined;
     let bestScore = Infinity;
     for (const v of this.order) {
-      if (!v.screen.visible || v.alpha < 0.3) continue;
+      if (!v.screen.visible || v.alpha < 0.2) continue;
       const dist = camPos.distanceTo(v.pos);
       const radius = Math.max(10, (SIZE[v.node.type] * 420) / dist / 2.2);
       const d = Math.hypot(v.screen.x - x, v.screen.y - y);

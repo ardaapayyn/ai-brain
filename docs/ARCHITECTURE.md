@@ -74,3 +74,18 @@ export const lintTool: Tool = {
 **Nuovo provider LLM** — implementa `LLMProvider` (`chat`, `health`, `listModels`) e registralo in `createProvider()` (`llm/router.ts`). Qualsiasi server OpenAI‑compatibile funziona già con `type: "openai"`.
 
 **Memoria semantica** — `MemoryStore.searchMemories` è l'unico punto di retrieval: si può sostituire con embeddings (es. `nomic-embed-text` via Ollama) senza toccare orchestratore o UI.
+
+## Avvio automatico (`AI-Brain.bat` → `scripts/windows/bootstrap.ps1` → `scripts/setup.mjs`)
+
+- **bootstrap.ps1** (solo ASCII, compatibile con Windows PowerShell 5.1): verifica Node.js ≥ 20.10 e Git; se mancano li installa con `winget`, aggiorna il PATH della sessione e passa il controllo a `setup.mjs`.
+- **setup.mjs** (Node puro, nessuna dipendenza, cross‑platform): rileva l'hardware (VRAM reale dal registro del driver su Windows, `nvidia-smi`/`lspci` su Linux), sceglie i modelli con `recommend()` (tenuta allineata con `server/src/system.ts`), scrive `brain.config.json` marcato `$generated` (se lo personalizzi e togli la riga, il setup non lo tocca più), installa/avvia Ollama, scarica i modelli via `/api/pull` con barra di progresso, misura l'offload GPU da `/api/ps` e salva l'esito in `~/.ai-brain/setup-state.json` per non ripetere la verifica, esegue `npm install`/`npm run build` solo se servono e infine avvia il server.
+- Dall'app: `GET /api/system` (hardware + raccomandazione) e `POST /api/models/pull` (download con eventi `model.pull`) alimentano Impostazioni → Modello e il banner "Scarica ora".
+
+## Interfaccia (web/src)
+
+- `scene/field.ts` — neuroni e sinapsi su GPU; `uAssemble` (intro), onde d'urto (`wave()`), impulsi sinaptici proporzionali all'attività.
+- `scene/nucleus.ts` — anelli e particelle orbitanti del nucleo; polvere di profondità.
+- `scene/graph.ts` — nodi semantici, archi con flusso, etichette DOM, picking in screen‑space, filtri per tipo, focus sul vicinato.
+- `scene/brain.ts` — renderer, camera cinematografica, bloom + pass finale (vignettatura, grana, aberrazione), qualità grafica.
+- `ui/activity.ts` — timeline a rendering incrementale (ogni elemento viene aggiornato solo se cambia).
+- `ui/command.ts`, `ui/palette.ts`, `ui/detail.ts`, `ui/modals.ts`, `ui/hud.ts`, `ui/intro.ts`, `ui/tooltip.ts`, `ui/toast.ts` — componenti; `prefs.ts` — preferenze locali (tema, qualità, animazioni, filtri).

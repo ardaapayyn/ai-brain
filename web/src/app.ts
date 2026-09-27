@@ -1,13 +1,22 @@
 import * as THREE from 'three';
 import { api, connectEvents } from './api';
-import { palette } from './scene/palette';
+import { prefs, savePrefs } from './prefs';
 import { BrainScene } from './scene/brain';
+import { palette } from './scene/palette';
 import { applyEvent, newRun, state, type RunView } from './state';
-import type { BrainEvent, Graph } from './types';
+import type { Approval, BrainEvent, Graph } from './types';
 import { ActivityPanel, approvalButtons } from './ui/activity';
+import { CommandBar } from './ui/command';
 import { DetailPanel } from './ui/detail';
 import { h } from './ui/dom';
-import { openAddProject, openSettings } from './ui/modals';
+import { Banner, HudLeft, HudRight, Legend, OfflineOverlay } from './ui/hud';
+import { icon } from './ui/icons';
+import { Intro } from './ui/intro';
+import { openAddProject, openSettings, type PullListener, type SettingsOptions } from './ui/modals';
+import { CommandPalette } from './ui/palette';
+import { mountToasts, toast } from './ui/toast';
+import { NodeTooltip } from './ui/tooltip';
+import { welcomeCard } from './ui/welcome';
 
 const CATEGORY_COLOR: Record<string, number> = {
   filesystem: 0x60a5fa,
@@ -21,30 +30,76 @@ const CATEGORY_COLOR: Record<string, number> = {
 };
 
 export class App {
-  private scene: BrainScene;
   private ui = document.getElementById('ui')!;
+  private scene: BrainScene;
+  private hudLeft: HudLeft;
+  private hudRight: HudRight;
+  private legend: Legend;
+  private banner = new Banner();
+  private offline = new OfflineOverlay();
+  private command: CommandBar;
   private activity: ActivityPanel;
   private detail: DetailPanel;
-  private ws!: ReturnType<typeof connectEvents>;
-  private statusPill = h('div', { class: 'status-pill glass' });
-  private banner = h('div', { class: 'banner glass' });
-  private toasts = h('div', { class: 'toasts' });
-  private command = h('div', { class: 'command glass' });
-  private textarea = h('textarea', { rows: 1, placeholder: 'Chiedi al tuo cervello…  es. «Analizza il mio progetto e sistema il combat system»' }) as HTMLTextAreaElement;
-  private ctxRow = h('div', { class: 'ctx' });
-  private sendBtn = h('button', { class: 'send', title: 'Invia (Enter)' }, '↑') as HTMLButtonElement;
+  private tooltip = new NodeTooltip();
+  private palette: CommandPalette;
   private floatApproval = h('div', { class: 'approval-float glass' });
-  private welcome = h('div', { class: 'welcome glass' });
-  private hint = h('div', { class: 'hint' }, 'trascina per ruotare · scroll per zoom · click su un nodo per entrare · doppio click per tornare · / per scrivere');
+  private floating?: Approval;
+  private welcome?: HTMLElement;
+  private welcomeDismissed = false;
+  private ws!: ReturnType<typeof connectEvents>;
   private graphTimer?: number;
-  private lastTokenPulse = 0;
+  private lastSpark = 0;
+  private tokenTimes: number[] = [];
+  private pullListeners = new Set<PullListener>();
+  private pullState?: { model: string; pct: number };
 
   constructor() {
     document.body.classList.toggle('light', state.theme === 'light');
-    this.scene = new BrainScene(document.getElementById('scene') as HTMLCanvasElement, document.getElementById('labels')!, state.theme);
+    document.body.classList.toggle('reduced', prefs.reducedMotion);
+    this.ui.classList.add('booting');
+    document.body.classList.add('booting');
+
+    this.scene = new BrainScene(document.getElementById('scene') as HTMLCanvasElement, document.getElementById('labels')!, {
+      theme: state.theme,
+      quality: prefs.quality,
+      autoRotate: prefs.autoRotate,
+    });
+    this.scene.graph.setHidden(prefs.hiddenTypes);
+
+    this.hudLeft = new HudLeft(
+      () => this.openSettings('model'),
+      () => this.goHome(),
+    );
+    this.hudRight = new HudRight(
+      {
+        palette: () => this.palette.toggle(),
+        addProject: () => this.addProject(),
+        home: () => this.goHome(),
+        toggleTheme: () => this.setTheme(state.theme === 'dark' ? 'light' : 'dark'),
+        settings: () => this.openSettings(),
+      },
+      state.theme,
+    );
+    this.legend = new Legend(new Set(prefs.hiddenTypes), (hidden) => {
+      savePrefs({ hiddenTypes: [...hidden] });
+      this.scene.graph.setHidden(hidden);
+    });
+    this.command = new CommandBar({
+      submit: (p) => this.submit(p),
+      stop: (runId) => api.cancelRun(runId).catch((e) => toast(e.message, 'error')),
+      chooseProject: (id) => {
+        this.setProject(id);
+        if (id) this.selectNode(id, true);
+      },
+      addProject: () => this.addProject(),
+      clearFollow: () => {
+        state.followTaskId = undefined;
+        this.renderContext();
+      },
+    });
     this.activity = new ActivityPanel({
       close: () => this.activity.hide(),
-      cancel: (id) => api.cancelRun(id).catch((e) => this.toast(e.message, true)),
+      cancel: (id) => api.cancelRun(id).catch((e) => toast(e.message, 'error')),
       revert: (id) => this.revert(id),
       approve: (id, ok, scope) => this.approve(id, ok, scope),
       followUp: (taskId) => {
@@ -55,14 +110,49 @@ export class App {
     this.detail = new DetailPanel({
       close: () => this.deselect(),
       focusNode: (id) => this.selectNode(id, true),
-      useProject: (id) => this.setProject(id),
+      useProject: (id) => {
+        this.setProject(id);
+        this.command.focus();
+      },
       followUp: (id, title) => this.setFollow(id, title),
       openRun: (id) => this.openRun(id),
-      toast: (m, e) => this.toast(m, e),
+      toast: (m, e) => toast(m, e ? 'error' : 'ok'),
       refresh: () => this.loadGraph(),
       confirm: (m) => window.confirm(m),
     });
-    this.buildChrome();
+    this.palette = new CommandPalette(
+      () => ({
+        nodes: this.scene.graph.nodes(),
+        actions: [
+          { id: 'add', label: 'Collega un progetto', icon: 'plus', run: () => this.addProject() },
+          { id: 'settings', label: 'Impostazioni', icon: 'settings', run: () => this.openSettings() },
+          { id: 'model', label: 'Cambia o scarica modello', icon: 'cpu', run: () => this.openSettings('model') },
+          { id: 'theme', label: `Tema ${state.theme === 'dark' ? 'chiaro' : 'scuro'}`, icon: state.theme === 'dark' ? 'sun' : 'moon', hint: 'T', run: () => this.setTheme(state.theme === 'dark' ? 'light' : 'dark') },
+          { id: 'home', label: 'Vista d’insieme', icon: 'target', run: () => this.goHome() },
+          { id: 'core', label: 'Stato del cervello e scorciatoie', icon: 'core', run: () => this.selectNode('core', true) },
+          ...(this.lastRun() ? [{ id: 'activity', label: 'Mostra l’ultima attività', icon: 'eye', run: () => this.activity.show(this.lastRun()!) }] : []),
+        ],
+      }),
+      (id) => this.selectNode(id, true),
+    );
+
+    this.floatApproval.style.display = 'none';
+    this.ui.append(
+      this.hudLeft.el,
+      this.hudRight.el,
+      this.legend.el,
+      this.banner.el,
+      this.detail.el,
+      this.activity.el,
+      this.floatApproval,
+      this.command.el,
+      this.tooltip.el,
+      this.offline.el,
+    );
+    mountToasts(this.ui);
+    this.legend.render({});
+
+    this.scene.onHover = (id, x, y) => this.tooltip.update(id ? this.scene.graph.get(id)?.node : undefined, x, y);
     this.scene.onSelect = (id) => (id ? this.selectNode(id, false) : this.deselect());
     this.bindKeys();
 
@@ -70,6 +160,7 @@ export class App {
       (e) => this.onEvent(e),
       (up) => {
         state.connected = up;
+        this.offline.set(!up);
         if (up) {
           this.loadStatus();
           this.loadGraph();
@@ -78,104 +169,158 @@ export class App {
       },
     );
     setInterval(() => this.loadStatus(), 15000);
-    setTimeout(() => (this.hint.style.opacity = '0'), 12000);
+    setInterval(() => this.tick(), 100);
+    this.boot();
   }
 
-  // ── chrome ──────────────────────────────────────────────────
-  private buildChrome() {
-    const hudLeft = h('div', { class: 'hud-left' }, h('div', { class: 'brand' }, 'AI', h('b', null, ' · '), 'BRAIN'), this.statusPill);
-    this.statusPill.addEventListener('click', () => this.openSettings());
-    const hudRight = h(
-      'div',
-      { class: 'hud-right' },
-      h('button', { class: 'btn icon', title: 'Vista d’insieme (doppio click)', onclick: () => (this.deselect(), this.scene.home()) }, '◎'),
-      h('button', { class: 'btn', title: 'Collega una cartella progetto', onclick: () => this.addProject() }, '+ Progetto'),
-      h('button', { class: 'btn icon', title: 'Tema chiaro/scuro (T)', onclick: () => this.toggleTheme() }, '◐'),
-      h('button', { class: 'btn icon', title: 'Impostazioni', onclick: () => this.openSettings() }, '⚙'),
-    );
-    this.banner.style.display = 'none';
-    this.floatApproval.style.display = 'none';
-    this.welcome.style.display = 'none';
-
-    this.textarea.addEventListener('input', () => this.autosize());
-    this.textarea.addEventListener('focus', () => this.command.classList.add('focus'));
-    this.textarea.addEventListener('blur', () => this.command.classList.remove('focus'));
-    this.textarea.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        this.submit();
-      }
-    });
-    this.sendBtn.addEventListener('click', () => this.submit());
-    this.command.append(this.ctxRow, h('div', { class: 'input-row' }, this.textarea, this.sendBtn));
-    this.ui.append(hudLeft, hudRight, this.banner, this.detail.el, this.activity.el, this.welcome, this.floatApproval, this.command, this.hint, this.toasts);
-    this.renderContext();
-    this.renderStatus();
+  // ── boot ────────────────────────────────────────────────────
+  private async boot() {
+    const reveal = () => {
+      this.ui.classList.remove('booting');
+      document.body.classList.remove('booting');
+    };
+    if (!prefs.intro || prefs.reducedMotion) {
+      reveal();
+      return;
+    }
+    const intro = new Intro();
+    this.ui.append(intro.el);
+    const assembled = this.scene.playIntro(3.4);
+    const finish = () => {
+      intro.finish();
+      reveal();
+    };
+    intro.onSkip = () => {
+      this.scene.skipIntro();
+      finish();
+    };
+    intro.progress(0.15);
+    const status = await Promise.race([api.status().catch(() => undefined), new Promise<undefined>((r) => setTimeout(() => r(undefined), 2500))]);
+    if (status) {
+      intro.step('nucleo connesso');
+      intro.progress(0.45);
+      await wait(350);
+      intro.step(status.llm.ok ? `${status.model} pronto` : `modello non pronto: ${status.model}`, status.llm.ok);
+      intro.progress(0.7);
+      const projects = await api.projects().catch(() => []);
+      await wait(350);
+      intro.step(projects.length ? `${projects.length} ${projects.length === 1 ? 'progetto' : 'progetti'} in memoria` : 'memoria pronta');
+      intro.progress(0.9);
+    } else intro.step('server non raggiungibile', false);
+    await assembled;
+    finish();
   }
 
-  private autosize() {
-    this.textarea.style.height = 'auto';
-    this.textarea.style.height = Math.min(this.textarea.scrollHeight, 180) + 'px';
-  }
-
-  private bindKeys() {
-    document.addEventListener('keydown', (e) => {
-      const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
-      if (e.key === 'Escape') {
-        if (typing) (e.target as HTMLElement).blur();
-        else if (this.detail.nodeId) this.deselect();
-        else if (this.activity.visibleRunId) this.activity.hide();
-        else this.scene.home();
-      } else if (!typing && e.key === '/') {
-        e.preventDefault();
-        this.textarea.focus();
-      } else if (!typing && (e.key === 't' || e.key === 'T')) {
-        this.toggleTheme();
-      }
-    });
-  }
-
-  private toggleTheme() {
-    this.setTheme(state.theme === 'dark' ? 'light' : 'dark');
-  }
+  // ── chrome helpers ──────────────────────────────────────────
   private setTheme(t: 'dark' | 'light') {
     state.theme = t;
-    try {
-      localStorage.setItem('brain.theme', t);
-    } catch {
-      /* ignore */
-    }
+    savePrefs({ theme: t });
     document.body.classList.toggle('light', t === 'light');
     this.scene.setTheme(t);
+    this.hudRight.setTheme(t);
   }
 
-  private openSettings() {
-    openSettings({ theme: state.theme, setTheme: (t) => this.setTheme(t), onSaved: () => this.loadStatus(), toast: (m, e) => this.toast(m, e) }).catch((e) => this.toast(e.message, true));
+  private settingsOptions(tab?: SettingsOptions['tab']): SettingsOptions {
+    return {
+      tab,
+      setTheme: (t) => this.setTheme(t),
+      setAutoRotate: (on) => this.scene.setAutoRotate(on),
+      setReducedMotion: (on) => document.body.classList.toggle('reduced', on),
+      onSaved: () => this.loadStatus(),
+      toast: (m, e) => toast(m, e ? 'error' : 'ok'),
+      subscribePull: (fn) => {
+        this.pullListeners.add(fn);
+        return () => this.pullListeners.delete(fn);
+      },
+    };
+  }
+
+  private openSettings(tab?: SettingsOptions['tab']) {
+    openSettings(this.settingsOptions(tab)).catch((e) => toast(e.message, 'error'));
   }
 
   private addProject() {
     openAddProject(
       async (p) => {
-        this.toast(`Progetto “${p.name}” collegato — indicizzazione in corso`);
+        toast(`“${p.name}” collegato — indicizzazione in corso`);
         this.setProject(p.id);
+        this.welcomeDismissed = true;
         await this.loadGraph();
-        setTimeout(() => this.selectNode(p.id, true), 400);
+        setTimeout(() => {
+          this.scene.wave(p.id, 0xa78bfa);
+          this.selectNode(p.id, true);
+        }, 350);
       },
-      (m, e) => this.toast(m, e),
+      (m, e) => toast(m, e ? 'error' : 'ok'),
     );
   }
 
-  toast(msg: string, error = false) {
-    const t = h('div', { class: `toast glass ${error ? 'error' : ''}` }, msg);
-    this.toasts.append(t);
-    setTimeout(() => t.remove(), error ? 7000 : 3500);
+  private goHome() {
+    this.deselect();
+    this.scene.home();
+  }
+
+  private bindKeys() {
+    document.addEventListener('keydown', (e) => {
+      const t = e.target as HTMLElement;
+      const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
+      const modalOpen = !!this.ui.querySelector('.backdrop');
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        this.palette.toggle();
+        return;
+      }
+      if (this.palette.open || modalOpen) return;
+      if (e.key === 'Escape') {
+        if (typing) t.blur();
+        else if (this.detail.nodeId) this.deselect();
+        else if (this.activity.visibleRunId) this.activity.hide();
+        else this.scene.home();
+        return;
+      }
+      const a = this.floating;
+      // Right after sending a prompt the (empty) command bar still has focus: approval keys must still work.
+      const emptyCommand = t === this.command.textarea && !this.command.textarea.value;
+      if ((typing && !(a && emptyCommand)) || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (a && this.floatApproval.style.display !== 'none') {
+        const k = e.key.toLowerCase();
+        const act = (ok: boolean, scope: 'once' | 'run') => {
+          e.preventDefault();
+          this.approve(a.id, ok, scope);
+        };
+        if (k === 'n') return act(false, 'once');
+        if (!a.danger && k === 'y') return act(true, 'once');
+        if (!a.danger && k === 'a') return act(true, 'run');
+      }
+      if (typing) return;
+      if (e.key === '/') {
+        e.preventDefault();
+        this.command.focus();
+      } else if (e.key === 't' || e.key === 'T') this.setTheme(state.theme === 'dark' ? 'light' : 'dark');
+      else if (e.key === '?') this.selectNode('core', true);
+    });
+  }
+
+  /** 10 Hz: sparkline, tokens/s, command-bar status. */
+  private tick() {
+    const now = performance.now();
+    while (this.tokenTimes.length && now - this.tokenTimes[0] > 1500) this.tokenTimes.shift();
+    const tps = this.tokenTimes.length > 2 ? this.tokenTimes.length / 1.5 : undefined;
+    const busy = [...state.runs.values()].some((r) => r.status === 'running');
+    this.hudLeft.pushActivity(this.scene.activityLevel, state.theme === 'dark' ? '#a78bfa' : '#7c3aed');
+    this.hudLeft.setMetric(tps, !state.connected ? '—' : busy ? 'al lavoro' : 'in attesa');
+    this.command.setRun(this.contextRun(), tps);
+    if (this.activity.tps !== tps) {
+      this.activity.tps = tps;
+    }
   }
 
   // ── data ────────────────────────────────────────────────────
   private async loadStatus() {
     try {
       state.status = await api.status();
-      for (const a of state.status.pendingApprovals) this.showFloatingApproval(a);
+      const pending = state.status.pendingApprovals[0];
+      if (pending) this.showFloatingApproval(pending);
     } catch {
       state.status = undefined;
     }
@@ -185,17 +330,30 @@ export class App {
   private renderStatus() {
     const s = state.status;
     const busy = [...state.runs.values()].some((r) => r.status === 'running');
-    const dotClass = !state.connected ? 'bad' : busy ? 'busy' : s?.llm.ok ? 'ok' : 'bad';
-    const label = !state.connected ? 'server offline' : s ? `${s.model}${busy ? ' · al lavoro' : s.llm.ok ? '' : ' · non pronto'}` : '…';
-    this.statusPill.replaceChildren(h('span', { class: `dot ${dotClass}` }), h('span', { class: 'mono' }, label));
-    if (!state.connected) {
-      this.banner.replaceChildren('Server non raggiungibile. Avvialo con ', h('code', null, 'npm run dev'), ' nella cartella di AI Brain.');
-      this.banner.style.display = '';
-    } else if (s && !s.llm.ok) {
-      const pull = /ollama pull (\S+)/.exec(s.llm.detail);
-      this.banner.replaceChildren('⚠ ', pull ? h('span', null, 'Modello non scaricato. Esegui ', h('code', null, `ollama pull ${pull[1]}`), ' oppure scegline un altro nelle impostazioni.') : s.llm.detail);
-      this.banner.style.display = '';
-    } else this.banner.style.display = 'none';
+    this.hudLeft.setStatus({ connected: state.connected, ok: !!s?.llm.ok, model: s?.model, busy });
+    if (!state.connected || !s) return this.banner.hide();
+    if (this.pullState) {
+      const p = this.pullState;
+      this.banner.show(h('span', null, 'Scarico ', h('code', null, p.model), ` · ${p.pct}%`), h('span', { class: 'prog' }, h('i', { style: `width:${p.pct}%` })));
+    } else if (!s.llm.ok && /not pulled/i.test(s.llm.detail)) {
+      this.banner.show(
+        h('span', null, 'Il modello ', h('code', null, s.model), ' non è ancora scaricato.'),
+        h('button', { class: 'btn primary', style: 'height:30px', onclick: () => this.pull(s.model) }, icon('download', 14), 'Scarica ora'),
+        h('button', { class: 'btn ghost', style: 'height:30px', onclick: () => this.openSettings('model') }, 'Scegli un altro'),
+      );
+    } else if (!s.llm.ok) {
+      this.banner.show(h('span', null, 'Il motore AI locale non risponde. Avvia ', h('code', null, 'AI-Brain.bat'), ' (lo avvia da solo) oppure Ollama.'), h('button', { class: 'btn ghost', style: 'height:30px', onclick: () => this.loadStatus() }, icon('refresh', 14), 'Riprova'));
+    } else this.banner.hide();
+  }
+
+  private pull(model: string) {
+    this.pullState = { model, pct: 0 };
+    this.renderStatus();
+    api.pullModel(model).catch((e) => {
+      this.pullState = undefined;
+      toast(e.message, 'error');
+      this.renderStatus();
+    });
   }
 
   private async loadGraph() {
@@ -206,13 +364,14 @@ export class App {
       if (state.projectId && !projects.some((p) => p.id === state.projectId)) state.projectId = null;
       if (!state.projectId && projects.length === 1) state.projectId = projects[0].id;
       this.scene.setGraph(g);
+      this.legend.render(this.scene.graph.counts());
       this.updateActivePath(g);
-      const shown = this.detail.nodeId && g.nodes.find((n) => n.id === this.detail.nodeId);
-      if (shown && (shown.type === 'project' || shown.type === 'task') && !document.activeElement?.closest('.panel.left')) this.detail.show(shown, true);
       this.renderContext();
       this.renderWelcome();
+      const shown = this.detail.nodeId && g.nodes.find((n) => n.id === this.detail.nodeId);
+      if (shown && (shown.type === 'project' || shown.type === 'task') && !document.activeElement?.closest('.panel.left')) this.detail.show(shown, true);
     } catch {
-      /* offline: banner already shown */
+      /* offline: overlay handles it */
     }
   }
 
@@ -227,22 +386,28 @@ export class App {
   }
 
   private renderWelcome() {
-    const show = state.connected && state.projects.length === 0 && !this.activity.visibleRunId;
-    this.welcome.style.display = show ? '' : 'none';
-    if (show)
-      this.welcome.replaceChildren(
-        h('h3', null, 'Benvenuto nel tuo cervello digitale'),
-        h('p', null, 'Collega la cartella di un progetto: diventerà un cluster di neuroni. Poi chiedi all’agente di analizzarlo, correggerlo o estenderlo — tutto in locale.'),
-        h('button', { class: 'btn primary', onclick: () => this.addProject() }, '+ Collega un progetto'),
+    const show = state.connected && state.projects.length === 0 && !this.welcomeDismissed && !this.activity.visibleRunId;
+    if (show && !this.welcome) {
+      this.welcome = welcomeCard(
+        () => this.addProject(),
+        () => {
+          this.welcomeDismissed = true;
+          this.renderWelcome();
+          this.command.focus();
+        },
       );
+      this.ui.append(this.welcome);
+    } else if (!show && this.welcome) {
+      this.welcome.remove();
+      this.welcome = undefined;
+    }
   }
 
-  // ── context (where prompts go) ──────────────────────────────
+  // ── context ─────────────────────────────────────────────────
   private setProject(id: string | null) {
     state.projectId = id;
     state.followTaskId = undefined;
     this.renderContext();
-    this.textarea.focus();
   }
 
   private setFollow(taskId: string, title: string) {
@@ -250,93 +415,34 @@ export class App {
     const node = state.graph?.nodes.find((n) => n.id === taskId);
     state.followTaskId = taskId;
     state.followTaskTitle = node?.label ?? title;
-    const projectId = run?.projectId ?? (node?.parent && node.parent !== 'core' ? node.parent : null);
-    if (projectId !== undefined) state.projectId = projectId;
+    state.projectId = run?.projectId ?? (node?.parent && node.parent !== 'core' ? node.parent : null);
     this.renderContext();
-    this.textarea.focus();
+    this.command.focus();
   }
 
   private renderContext() {
-    const project = state.projects.find((p) => p.id === state.projectId);
-    const projectChip = h('button', { class: 'chip', title: 'Scegli dove lavora l’agente' }, project ? `◈ ${project.name}` : '◌ nessun progetto (scratch)', ' ▾');
-    projectChip.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.toggleProjectMenu(projectChip);
-    });
-    const chips: HTMLElement[] = [projectChip];
-    if (state.followTaskId) {
-      chips.push(
-        h(
-          'button',
-          {
-            class: 'chip',
-            title: 'Il prossimo messaggio continua questo task (clic per annullare)',
-            onclick: () => {
-              state.followTaskId = undefined;
-              this.renderContext();
-            },
-          },
-          `↳ ${state.followTaskTitle}`,
-          h('span', { class: 'x' }, '✕'),
-        ),
-      );
-    }
-    this.ctxRow.replaceChildren(...chips);
-    const running = this.currentContextRun();
-    this.command.classList.toggle('busy', !!running);
-    this.sendBtn.classList.toggle('stop', !!running);
-    this.sendBtn.textContent = running ? '■' : '↑';
-    this.sendBtn.title = running ? 'Interrompi l’esecuzione' : 'Invia (Enter)';
+    this.command.setContext(state.projects, state.projectId, state.followTaskId ? state.followTaskTitle : undefined);
   }
 
-  private toggleProjectMenu(anchor: HTMLElement) {
-    const existing = this.command.querySelector('.menu');
-    if (existing) return existing.remove();
-    const choose = (id: string | null) => {
-      menu.remove();
-      this.setProject(id);
-      if (id) this.scene.flyTo(id);
-    };
-    const menu = h(
-      'div',
-      { class: 'menu glass scroll' },
-      ...state.projects.map((p) => h('button', { class: p.id === state.projectId ? 'on' : '', onclick: () => choose(p.id) }, '◈ ', p.name)),
-      h('button', { class: state.projectId === null ? 'on' : '', onclick: () => choose(null) }, '◌ nessun progetto (scratch)'),
-      h('button', { onclick: () => (menu.remove(), this.addProject()) }, '+ collega un progetto…'),
-    );
-    this.command.append(menu);
-    const off = (e: MouseEvent) => {
-      if (!menu.contains(e.target as Node) && e.target !== anchor) {
-        menu.remove();
-        document.removeEventListener('mousedown', off);
-      }
-    };
-    document.addEventListener('mousedown', off);
-  }
-
-  private currentContextRun(): RunView | undefined {
+  private contextRun(): RunView | undefined {
     return [...state.runs.values()].find((r) => r.status === 'running' && r.projectId === state.projectId);
   }
 
-  private async submit() {
-    const running = this.currentContextRun();
-    if (running) {
-      await api.cancelRun(running.runId).catch((e) => this.toast(e.message, true));
-      return;
-    }
-    const prompt = this.textarea.value.trim();
-    if (!prompt) return;
-    this.sendBtn.disabled = true;
+  private lastRun(): RunView | undefined {
+    return [...state.runs.values()].sort((a, b) => b.startedAt - a.startedAt)[0];
+  }
+
+  private async submit(prompt: string): Promise<boolean> {
     try {
       await api.startRun(prompt, state.projectId, state.followTaskId);
-      this.textarea.value = '';
-      this.autosize();
       state.followTaskId = undefined;
+      this.welcomeDismissed = true;
       this.renderContext();
+      this.renderWelcome();
+      return true;
     } catch (err: any) {
-      this.toast(err.message, true);
-    } finally {
-      this.sendBtn.disabled = false;
+      toast(err.message, 'error');
+      return false;
     }
   }
 
@@ -352,7 +458,7 @@ export class App {
       this.renderContext();
     }
     this.detail.show(node);
-    // entering a running task shows its live activity
+    document.body.classList.add('has-left');
     if (node.type === 'task') {
       const live = [...state.runs.values()].find((r) => r.taskId === id && r.status === 'running');
       if (live) this.activity.show(live);
@@ -363,6 +469,7 @@ export class App {
     state.selectedNode = undefined;
     this.scene.graph.selected = undefined;
     this.detail.hide();
+    document.body.classList.remove('has-left');
   }
 
   private async openRun(runId: string) {
@@ -370,7 +477,7 @@ export class App {
     if (!run) {
       const { run: rec, events } = await api.run(runId);
       const start = events.find((e) => e.type === 'run.started');
-      if (!start || start.type !== 'run.started') return this.toast('Log non disponibile per questa esecuzione', true);
+      if (!start || start.type !== 'run.started') return toast('Log non disponibile per questa esecuzione', 'error');
       run = newRun(start, rec.startedAt);
       for (const e of events) applyEvent(run, e);
       run.status = rec.status;
@@ -389,31 +496,36 @@ export class App {
       const run = state.runs.get(runId);
       if (run) run.reverted = true;
       this.activity.invalidate();
-      this.toast(`Ripristinati ${r.restored.length} file`);
+      toast(`Ripristinati ${r.restored.length} file`);
+      this.scene.wave(run?.taskId ?? 'core', 0x67e8f9);
     } catch (err: any) {
-      this.toast(err.message, true);
+      toast(err.message, 'error');
     }
   }
 
   private approve(id: string, approved: boolean, scope: 'once' | 'run') {
     this.ws.send({ type: 'approval', id, approved, scope });
-    api.approve(id, approved, scope).catch(() => {}); // HTTP fallback; duplicate resolve is a no-op
-    this.floatApproval.style.display = 'none';
+    api.approve(id, approved, scope).catch(() => {}); // HTTP fallback; a duplicate resolve is a no-op
+    if (this.floating?.id === id) this.hideFloatingApproval();
   }
 
-  private showFloatingApproval(a: { id: string; tool: string; summary: string; detail: string; danger: boolean }) {
-    // Visible even when the activity panel is closed.
-    this.floatApproval.dataset.id = a.id;
+  private showFloatingApproval(a: Approval) {
+    this.floating = a;
     this.floatApproval.replaceChildren(
       h(
         'div',
-        { class: `approval ${a.danger ? 'danger' : ''}`, style: 'border:none;background:none;padding:0' },
-        h('div', { class: 'title' }, a.danger ? '⚠ L’agente vuole eseguire un’azione distruttiva' : '◆ L’agente chiede conferma', h('span', { class: 'mono faint' }, a.tool)),
+        { class: `approval ${a.danger ? 'danger' : ''}` },
+        h('div', { class: 'a-title' }, icon(a.danger ? 'alert' : 'shield', 16), a.danger ? 'L’agente vuole eseguire un’azione distruttiva' : 'L’agente chiede il permesso', h('span', { class: 'tool' }, a.tool)),
         h('pre', null, a.detail || a.summary),
-        approvalButtons(a.id, a.danger, (id, ok, scope) => this.approve(id, ok, scope)),
+        approvalButtons(a.id, a.danger, (id, ok, scope) => this.approve(id, ok, scope), true),
       ),
     );
     this.floatApproval.style.display = '';
+  }
+
+  private hideFloatingApproval() {
+    this.floating = undefined;
+    this.floatApproval.style.display = 'none';
   }
 
   // ── live events → UI + 3D choreography ─────────────────────
@@ -422,15 +534,29 @@ export class App {
     const pos = (id: string) => () => sc.graph.position(id);
     const pal = palette(state.theme);
 
-    if (e.type === 'hello') {
-      if (e.pendingApprovals[0]) this.showFloatingApproval(e.pendingApprovals[0]);
-      sc.setActivity(e.activeRuns.length ? 0.6 : 0);
-      return;
-    }
-    if (e.type === 'graph.changed') return this.scheduleGraph();
-    if (e.type === 'memory.added') {
-      sc.pulses.fire(pos('core'), pos('tool:memory'), { color: pal.memory.decision, size: 9 });
-      return;
+    switch (e.type) {
+      case 'hello':
+        if (e.pendingApprovals[0]) this.showFloatingApproval(e.pendingApprovals[0]);
+        sc.setActivity(e.activeRuns.length ? 0.6 : 0);
+        return;
+      case 'graph.changed':
+        return this.scheduleGraph();
+      case 'memory.added':
+        sc.pulses.fire(pos('core'), pos('tool:memory'), { color: pal.memory.decision, size: 10 });
+        return;
+      case 'model.pull': {
+        for (const fn of this.pullListeners) fn(e);
+        if (e.done) {
+          if (this.pullState?.model === e.model) this.pullState = undefined;
+          if (e.error) toast(`${e.model}: ${e.error}`, 'error');
+          else toast(`${e.model} scaricato e pronto`);
+          this.loadStatus();
+        } else if (this.pullState?.model === e.model || !this.pullState) {
+          this.pullState = { model: e.model, pct: e.total ? Math.round(((e.completed ?? 0) / e.total) * 100) : 0 };
+          this.renderStatus();
+        }
+        return;
+      }
     }
 
     let run = 'runId' in e ? state.runs.get(e.runId) : undefined;
@@ -439,12 +565,11 @@ export class App {
       state.runs.set(e.runId, run);
       sc.setActivity(0.7);
       this.activity.show(run);
-      this.welcome.style.display = 'none';
-      this.renderContext();
+      this.renderWelcome();
       this.renderStatus();
-      // wait for the new task node to exist in the graph, then fly to it
       this.loadGraph().then(() => {
-        sc.pulses.chain([pos('core'), pos(e.projectId ?? 'core'), pos(e.taskId)], { color: pal.taskRunning, size: 11, duration: 0.7 });
+        sc.wave(e.projectId ?? 'core', state.theme === 'dark' ? 0xc4b5fd : 0x6d28d9);
+        sc.pulses.chain([pos('core'), pos(e.projectId ?? 'core'), pos(e.taskId)], { color: pal.taskRunning, size: 12, duration: 0.7 });
         if (!state.selectedNode || state.selectedNode === e.projectId) sc.flyTo(e.taskId, 170);
       });
       return;
@@ -461,8 +586,9 @@ export class App {
         break;
       case 'llm.token': {
         const now = performance.now();
-        if (now - this.lastTokenPulse > 110) {
-          this.lastTokenPulse = now;
+        this.tokenTimes.push(now);
+        if (now - this.lastSpark > 110) {
+          this.lastSpark = now;
           sc.spark();
           sc.bumpActivity(0.03);
           if (Math.random() < 0.35) sc.pulses.fire(pos('core'), taskPos, { color: pal.fieldB, size: 5, duration: 0.8 });
@@ -471,7 +597,7 @@ export class App {
       }
       case 'tool.started': {
         const color = CATEGORY_COLOR[e.category] ?? pal.pulse;
-        sc.pulses.chain([pos('core'), pos(`tool:${e.category}`), pos(hub), taskPos], { color, size: 9, duration: 0.55 });
+        sc.pulses.chain([pos('core'), pos(`tool:${e.category}`), pos(hub), taskPos], { color, size: 10, duration: 0.55 });
         sc.bumpActivity(0.2);
         break;
       }
@@ -479,35 +605,40 @@ export class App {
         if (Math.random() < 0.15) sc.spark(CATEGORY_COLOR.terminal);
         break;
       case 'tool.finished': {
-        const cat = run.items.find((i) => i.kind === 'tool' && i.callId === e.callId);
-        const category = cat && cat.kind === 'tool' ? cat.category : 'planning';
-        sc.pulses.fire(taskPos, pos(`tool:${category}`), { color: e.ok ? pal.ok : pal.fail, size: 8, duration: 0.7 });
+        const item = run.items.find((i) => i.kind === 'tool' && i.callId === e.callId);
+        const category = item && item.kind === 'tool' ? item.category : 'planning';
+        sc.pulses.fire(taskPos, pos(`tool:${category}`), { color: e.ok ? pal.ok : pal.fail, size: 9, duration: 0.7 });
         break;
       }
       case 'plan.updated':
-        for (let i = 0; i < e.steps.length; i++) setTimeout(() => sc.pulses.fire(pos('tool:planning'), taskPos, { color: CATEGORY_COLOR.planning, size: 7 }), i * 90);
+        e.steps.forEach((_, i) => setTimeout(() => sc.pulses.fire(pos('tool:planning'), taskPos, { color: CATEGORY_COLOR.planning, size: 8 }), i * 90));
         break;
       case 'approval.requested':
         this.showFloatingApproval(e);
-        sc.pulses.fire(taskPos, pos('core'), { color: pal.taskRunning, size: 14, duration: 1.2 });
+        sc.pulses.fire(taskPos, pos('core'), { color: pal.taskRunning, size: 15, duration: 1.2 });
         break;
       case 'approval.resolved':
-        if (this.floatApproval.dataset.id === e.id) this.floatApproval.style.display = 'none';
+        if (this.floating?.id === e.id) this.hideFloatingApproval();
         break;
       case 'run.finished': {
         sc.setActivity(0);
         const color = e.status === 'done' ? pal.ok : e.status === 'failed' ? pal.fail : pal.pulse;
+        sc.wave(run.taskId, color);
         const origin = sc.graph.position(run.taskId)?.clone() ?? new THREE.Vector3();
-        for (let i = 0; i < 18; i++) {
-          const dir = new THREE.Vector3().randomDirection().multiplyScalar(40 + Math.random() * 60);
-          sc.pulses.fire(origin, origin.clone().add(dir), { color, size: 8, duration: 0.9 + Math.random() * 0.6, arc: 0.1 });
+        for (let i = 0; i < 22; i++) {
+          const dir = new THREE.Vector3().randomDirection().multiplyScalar(40 + Math.random() * 70);
+          sc.pulses.fire(origin, origin.clone().add(dir), { color, size: 8, duration: 0.9 + Math.random() * 0.7, arc: 0.1 });
         }
-        if (this.floatApproval.style.display !== 'none') this.floatApproval.style.display = 'none';
-        this.renderContext();
+        if (this.floating?.runId === run.runId) this.hideFloatingApproval();
+        this.tokenTimes = [];
+        this.tick();
         this.renderStatus();
-        if (e.status === 'failed') this.toast('Esecuzione terminata con errori — vedi il report', true);
+        if (e.status === 'done') toast('Task completato');
+        else if (e.status === 'failed') toast('Esecuzione terminata con errori — leggi il report', 'error');
         break;
       }
     }
   }
 }
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));

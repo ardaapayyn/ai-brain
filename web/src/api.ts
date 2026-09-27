@@ -1,4 +1,4 @@
-import type { BrainEvent, Graph, Memory, Project, RunRecord, Settings, Status, Task } from './types';
+import type { BrainEvent, Graph, Memory, Project, RunRecord, Settings, Status, SystemInfo, Task } from './types';
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -14,6 +14,8 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 export const api = {
   status: () => req<Status>('GET', '/api/status'),
   models: () => req<{ models: string[]; error?: string }>('GET', '/api/models'),
+  system: () => req<SystemInfo>('GET', '/api/system'),
+  pullModel: (model: string) => req<{ started: boolean }>('POST', '/api/models/pull', { model }),
   settings: () => req<Settings>('GET', '/api/settings'),
   saveSettings: (patch: unknown) => req<Settings>('PUT', '/api/settings', patch),
   graph: () => req<Graph>('GET', '/api/graph'),
