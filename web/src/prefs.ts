@@ -8,6 +8,9 @@ export interface Prefs {
   autoRotate: boolean;
   intro: boolean;
   hiddenTypes: string[];
+  mode: 'auto' | 'fast' | 'deep';
+  /** Render at ~30 fps while the agent works so the GPU stays free for the model. */
+  gpuSaver: boolean;
 }
 
 const KEY = 'brain.prefs.v2';
@@ -21,6 +24,8 @@ function load(): Prefs {
     autoRotate: !systemReduced,
     intro: true,
     hiddenTypes: [],
+    mode: 'auto',
+    gpuSaver: true,
   };
   try {
     const legacyTheme = localStorage.getItem('brain.theme');

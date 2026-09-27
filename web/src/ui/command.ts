@@ -11,10 +11,28 @@ const SUGGESTIONS: [string, string, string][] = [
   ['gauge', 'Migliora le performance', 'Trova i colli di bottiglia di performance più evidenti e proponi/applica le ottimizzazioni.'],
 ];
 
-const PHASE: Record<string, string> = { thinking: 'Sta pensando', tool: 'Sta eseguendo', waiting_approval: 'Attende la tua conferma', verifying: 'Sta verificando' };
+const PHASE: Record<string, string> = {
+  thinking: 'Sta pensando',
+  loading: 'Carica il modello in memoria',
+  reading: 'Legge il contesto',
+  reasoning: 'Ragiona',
+  writing: 'Scrive la risposta',
+  tool: 'Sta eseguendo',
+  waiting_approval: 'Attende la tua conferma',
+  verifying: 'Sta verificando',
+};
+
+export type Mode = 'auto' | 'fast' | 'deep';
+const MODES: Record<Mode, [string, string, string]> = {
+  auto: ['sparkles', 'Auto', 'Auto: domande veloci al modello rapido, lavori di codice al modello profondo'],
+  fast: ['bolt', 'Veloce', 'Veloce: modello piccolo tutto in GPU, risposte in pochi secondi'],
+  deep: ['cpu', 'Profondo', 'Profondo: modello di coding grande, per analisi e modifiche serie'],
+};
 
 export interface CommandActions {
-  submit(prompt: string): Promise<boolean>;
+  submit(prompt: string, mode: Mode): Promise<boolean>;
+  modeChanged(mode: Mode): void;
+  warmup(mode: Mode): void;
   stop(runId: string): void;
   chooseProject(id: string | null): void;
   addProject(): void;
@@ -26,6 +44,9 @@ export class CommandBar {
   readonly el = h('div', { class: 'command glass' });
   readonly textarea = h('textarea', { rows: 1, placeholder: 'Chiedi qualcosa al tuo cervello…', spellcheck: false }) as HTMLTextAreaElement;
   private top = h('div', { class: 'cmd-ctx' });
+  private modeBtn = h('button', { class: 'mode-btn' }) as HTMLButtonElement;
+  mode: Mode = 'auto';
+  private lastWarm = 0;
   private follow = h('div', { class: 'cmd-follow' });
   private suggestions = h('div', { class: 'suggestions' });
   private status = h('div', { class: 'cmd-status' });
@@ -38,13 +59,22 @@ export class CommandBar {
 
   constructor(private a: CommandActions) {
     this.send.append(icon('arrowUp', 19));
-    this.el.append(h('div', { class: 'aura' }), this.suggestions, this.follow, h('div', { class: 'cmd-row' }, this.top, this.textarea, this.send), this.status);
+    this.el.append(h('div', { class: 'aura' }), this.suggestions, this.follow, h('div', { class: 'cmd-row' }, this.top, this.textarea, this.modeBtn, this.send), this.status);
+    this.renderMode();
+    this.modeBtn.addEventListener('click', () => {
+      const order: Mode[] = ['auto', 'fast', 'deep'];
+      this.mode = order[(order.indexOf(this.mode) + 1) % order.length];
+      this.renderMode();
+      this.a.modeChanged(this.mode);
+      this.a.warmup(this.mode);
+    });
     this.follow.style.display = 'none';
     this.status.style.display = 'none';
     this.suggestions.style.display = 'none';
     this.textarea.addEventListener('input', () => this.onInput());
     this.textarea.addEventListener('focus', () => {
       this.el.classList.add('focus');
+      this.maybeWarm();
       this.renderSuggestions();
     });
     this.textarea.addEventListener('blur', () => {
@@ -92,6 +122,7 @@ export class CommandBar {
       const parts: (Node | null)[] = [
         h('span', { class: 'mini-spin' }),
         h('span', { class: 'what' }, `${PHASE[r.phase ?? 'thinking'] ?? 'Al lavoro'}${what ? ': ' : '…'}`, what ? h('b', null, what) : null),
+        !['tool', 'waiting_approval', 'writing'].includes(r.phase ?? '') ? h('span', { class: 'step' }, `${Math.round((Date.now() - r.phaseSince) / 1000)}s`) : null,
         tps ? h('span', { class: 'step' }, `${tps.toFixed(0)} tok/s`) : null,
         h('span', { class: 'step' }, `step ${r.step}`),
       ];
@@ -99,7 +130,27 @@ export class CommandBar {
     }
   }
 
+  setMode(mode: Mode) {
+    this.mode = mode;
+    this.renderMode();
+  }
+
+  private renderMode() {
+    const [ic, label, tip] = MODES[this.mode];
+    this.modeBtn.className = `mode-btn m-${this.mode}`;
+    this.modeBtn.title = `${tip} — clic per cambiare`;
+    this.modeBtn.replaceChildren(icon(ic, 14), h('span', null, label));
+  }
+
+  /** Start loading the model while the user is still typing (throttled). */
+  private maybeWarm() {
+    if (Date.now() - this.lastWarm < 60_000) return;
+    this.lastWarm = Date.now();
+    this.a.warmup(this.mode);
+  }
+
   private onInput() {
+    if (this.textarea.value) this.maybeWarm();
     this.textarea.style.height = 'auto';
     this.textarea.style.height = Math.min(this.textarea.scrollHeight, 200) + 'px';
     this.send.classList.toggle('idle', !this.busy && !this.textarea.value.trim());
@@ -137,7 +188,7 @@ export class CommandBar {
     const prompt = this.textarea.value.trim();
     if (!prompt) return this.textarea.focus();
     this.send.disabled = true;
-    const ok = await this.a.submit(prompt);
+    const ok = await this.a.submit(prompt, this.mode);
     this.send.disabled = false;
     if (ok) {
       this.textarea.value = '';

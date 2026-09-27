@@ -70,6 +70,10 @@ export interface LLMProvider {
   chat(req: ChatRequest): Promise<ChatResponse>;
   health(): Promise<ProviderHealth>;
   listModels(): Promise<string[]>;
+  /** Is the model already loaded in memory? (undefined = unknown) */
+  isLoaded?(): Promise<boolean | undefined>;
+  /** Load the model and pre-fill its prompt cache with a static prefix (system prompt + tools). */
+  warmup?(messages: ChatMessage[], tools: ToolSpec[]): Promise<void>;
   /** Download a model (runtimes that support it, e.g. Ollama). */
   pull?(model: string, onProgress: (p: PullProgress) => void, signal?: AbortSignal): Promise<void>;
 }

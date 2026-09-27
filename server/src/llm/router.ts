@@ -50,6 +50,16 @@ export class LLMRouter implements LLMProvider {
     return [...this.providers.keys()];
   }
 
+  /** A specific configured provider (e.g. the fast one), if it exists. */
+  provider(id: string | undefined): LLMProvider | undefined {
+    return id ? this.providers.get(id) : undefined;
+  }
+
+  get fastId(): string | undefined {
+    const id = this.cfg.fast;
+    return id && id !== this.cfg.active && this.providers.has(id) ? id : undefined;
+  }
+
   private chain(): LLMProvider[] {
     const ids = [this.cfg.active, ...this.cfg.fallbacks.filter((f) => f !== this.cfg.active)];
     return ids.map((id) => this.providers.get(id)).filter((p): p is LLMProvider => !!p);
@@ -71,6 +81,14 @@ export class LLMRouter implements LLMProvider {
       }
     }
     throw lastErr ?? new Error('No LLM provider configured');
+  }
+
+  isLoaded() {
+    return this.active.isLoaded?.() ?? Promise.resolve(undefined);
+  }
+
+  warmup(messages: Parameters<NonNullable<LLMProvider['warmup']>>[0], tools: Parameters<NonNullable<LLMProvider['warmup']>>[1]) {
+    return this.active.warmup?.(messages, tools) ?? Promise.resolve();
   }
 
   health(): Promise<ProviderHealth> {

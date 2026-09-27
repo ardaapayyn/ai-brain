@@ -13,7 +13,7 @@ import { Dust, Nucleus } from './nucleus';
 import { palette, type Theme } from './palette';
 import { PulseLayer } from './pulses';
 
-const HOME_POS = new THREE.Vector3(40, 70, 420);
+const HOME_POS = new THREE.Vector3(-360, 110, 250); // three-quarter side view: reads as a brain
 const HOME_TARGET = new THREE.Vector3(0, 0, 0);
 const INTRO_POS = new THREE.Vector3(-260, 380, 1500);
 
@@ -82,6 +82,11 @@ export class BrainScene {
   private theme: Theme;
   private autoRotate: boolean;
   private pointer = { x: -1, y: -1, down: false, moved: 0 };
+  /** Leave the GPU to the local model while the agent works (~30 fps). */
+  gpuSaver = true;
+  private frameNo = 0;
+  private basePixelRatio = 1;
+  private perf = { sum: 0, n: 0, good: 0, scale: 1 };
   onSelect?: (id: string | undefined) => void;
   onHover?: (id: string | undefined, x: number, y: number) => void;
 
@@ -91,6 +96,7 @@ export class BrainScene {
     const q = QUALITY[opts.quality];
     this.bloomScale = q.bloom;
     const pr = Math.min(window.devicePixelRatio, q.pixelRatio);
+    this.basePixelRatio = pr;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', alpha: false });
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -202,20 +208,22 @@ export class BrainScene {
   flyTo(id: string, distance?: number) {
     const v = this.graph.get(id);
     if (!v) return;
-    const d = distance ?? ({ core: 190, tool: 110, project: 150, module: 70, task: 70, memory: 55 } as const)[v.node.type];
-    const target = v.target.clone();
-    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
-    if (v.node.type === 'project') {
-      // three-quarter view from outside the brain: the core sits beside the cluster, not behind it
-      const out = target.clone().normalize();
+    if (v.node.type !== 'core') {
+      // Stay OUTSIDE the brain: look at the region from beyond the surface so the brain's shape
+      // stays readable instead of flying into a wall of particles.
+      const target = v.target.clone();
+      const out = target.clone();
+      if (out.lengthSq() < 1) out.copy(this.camera.position);
+      out.normalize();
       const side = new THREE.Vector3(0, 1, 0).cross(out).normalize();
-      dir.copy(out.multiplyScalar(0.55).add(side.multiplyScalar(0.8)).add(new THREE.Vector3(0, 0.35, 0))).normalize();
-    } else if (v.node.type === 'module' || v.node.type === 'task') {
-      const out = target.clone().normalize();
-      const side = new THREE.Vector3(0, 1, 0).cross(out).normalize();
-      dir.lerp(out.add(side.multiplyScalar(0.7)).normalize(), 0.7).normalize();
+      const dir = out.multiplyScalar(0.85).add(side.multiplyScalar(0.4)).add(new THREE.Vector3(0, 0.28, 0)).normalize();
+      const dist = Math.max(330, target.length() + (distance ?? 250));
+      this.startFlight(dir.multiplyScalar(dist), target.multiplyScalar(0.55), 1.6, id);
+      return;
     }
-    this.startFlight(target.clone().add(dir.multiplyScalar(d)), target, 1.5, id);
+    // the core: pull back to a comfortable overview distance
+    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+    this.startFlight(v.target.clone().add(dir.multiplyScalar(distance ?? 300)), v.target.clone(), 1.5, id);
   }
 
   home() {
@@ -280,8 +288,39 @@ export class BrainScene {
     this.pulses.fire(a, b, { color: color ?? palette(this.theme).fieldB, duration: 0.5 + Math.random() * 0.5, size: 4, arc: 0.1 });
   }
 
+  /** Dynamic resolution: keep the animation fluid on any GPU (and while Ollama shares it). */
+  private adapt(rawDt: number, halfRate: boolean) {
+    if (rawDt > 0.25) return; // tab was hidden
+    const p = this.perf;
+    p.sum += rawDt;
+    p.n++;
+    if (p.sum < 1.5) return;
+    const avg = p.sum / p.n;
+    const expected = halfRate ? 1 / 30 : 1 / 60;
+    let next = p.scale;
+    if (avg > expected * 1.5) {
+      next = Math.max(0.55, p.scale - 0.15);
+      p.good = 0;
+    } else if (avg < expected * 1.12 && ++p.good >= 3) {
+      next = Math.min(1, p.scale + 0.1);
+      p.good = 0;
+    }
+    if (next !== p.scale) {
+      p.scale = next;
+      const pr = this.basePixelRatio * next;
+      this.renderer.setPixelRatio(pr);
+      this.composer.setPixelRatio(pr);
+    }
+    p.sum = 0;
+    p.n = 0;
+  }
+
   private frame() {
-    const dt = Math.min(this.clock.getDelta(), 0.05);
+    const halfRate = this.gpuSaver && this.targetActivity > 0.2 && !this.flight;
+    if (halfRate && this.frameNo++ % 2) return; // skipped frame: next getDelta covers both
+    const rawDt = this.clock.getDelta();
+    this.adapt(rawDt, halfRate);
+    const dt = Math.min(rawDt, 0.05);
     const time = this.clock.elapsedTime;
 
     if (this.assemble) {

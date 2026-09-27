@@ -1,5 +1,5 @@
 import type { ProviderConfig } from '../config.js';
-import type { ChatMessage, ChatRequest, ChatResponse, LLMProvider, ProviderHealth, PullProgress, ToolCall } from './types.js';
+import type { ChatMessage, ChatRequest, ChatResponse, LLMProvider, ProviderHealth, PullProgress, ToolCall, ToolSpec } from './types.js';
 import { callId, extractTextToolCalls, parseArgs, providerFetch, readLines, splitThinking } from './util.js';
 
 /** Native Ollama provider (/api/chat, streaming NDJSON, structured tool calls). */
@@ -28,20 +28,46 @@ export class OllamaProvider implements LLMProvider {
     return { role: m.role, content: m.content };
   }
 
-  async chat(req: ChatRequest): Promise<ChatResponse> {
-    const body = {
+  /** Only models with a switchable reasoning mode accept `think`; others would reject the request. */
+  private get think(): boolean | undefined {
+    if (this.cfg.think === undefined) return undefined;
+    return /^(qwen3(?!-coder)|qwen3\.|deepseek-r1|magistral|cogito)/i.test(this.cfg.model) ? this.cfg.think : undefined;
+  }
+
+  private body(messages: ChatMessage[], tools: ToolSpec[] | undefined, extra: Record<string, unknown> = {}) {
+    return {
       model: this.cfg.model,
-      messages: req.messages.map((m) => this.toOllama(m)),
-      tools: req.tools?.length
-        ? req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }))
-        : undefined,
-      stream: true,
+      messages: messages.map((m) => this.toOllama(m)),
+      tools: tools?.length ? tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) : undefined,
+      think: this.think,
       keep_alive: this.cfg.keepAlive,
-      options: {
-        num_ctx: this.contextTokens,
-        temperature: req.temperature ?? this.cfg.temperature ?? 0.2,
-      },
+      ...extra,
+      // num_ctx must be identical on every call, otherwise Ollama reloads the model
+      options: { num_ctx: this.contextTokens, temperature: this.cfg.temperature ?? 0.2, ...((extra.options as object) ?? {}) },
     };
+  }
+
+  async isLoaded(): Promise<boolean | undefined> {
+    try {
+      const res = await fetch(`${this.base}/api/ps`, { signal: AbortSignal.timeout(1500) });
+      const data: any = await res.json();
+      return (data.models ?? []).some((m: any) => m.name === this.cfg.model || m.model === this.cfg.model || m.name === `${this.cfg.model}:latest`);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async warmup(messages: ChatMessage[], tools: ToolSpec[]): Promise<void> {
+    await providerFetch(this.id, `${this.base}/api/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(this.body(messages, tools, { stream: false, options: { num_predict: 1 } })),
+      signal: AbortSignal.timeout(10 * 60_000),
+    }).then((r) => r.text());
+  }
+
+  async chat(req: ChatRequest): Promise<ChatResponse> {
+    const body = this.body(req.messages, req.tools, { stream: true, options: { temperature: req.temperature ?? this.cfg.temperature ?? 0.2 } });
     const res = await providerFetch(this.id, `${this.base}/api/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

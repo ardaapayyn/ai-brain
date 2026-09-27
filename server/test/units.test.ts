@@ -161,3 +161,23 @@ test('search_code finds matches and respects globs', async () => {
   assert.doesNotMatch(ts.output, /notes\.md/);
   assert.match(ts.output, /combat\.ts/);
 });
+
+test('auto mode: quick asks go fast, engineering work goes deep', async () => {
+  const { classifyRequest } = await import('../src/agent/orchestrator.js');
+  assert.equal(classifyRequest('riesci a rinominare la cartella in ai-brain?'), 'fast');
+  assert.equal(classifyRequest('cosa fa questo progetto?'), 'fast');
+  assert.equal(classifyRequest('Analizza il mio progetto e sistema il combat system.'), 'deep');
+  assert.equal(classifyRequest('fix the failing tests'), 'deep');
+  assert.equal(classifyRequest('x'.repeat(300)), 'deep');
+});
+
+test('system prompt is static (cacheable); per-run data lives in the context message', async () => {
+  const { systemPrompt, contextMessage } = await import('../src/agent/prompts.js');
+  assert.equal(systemPrompt('cmd.exe'), systemPrompt('cmd.exe'));
+  const task = { id: 't', projectId: 'p', title: 't', status: 'active', plan: [], history: [], filesTouched: [], runIds: [], createdAt: 0, updatedAt: 0 } as any;
+  const msg = contextMessage({ project: { id: 'p', name: 'Arena', path: '/x', createdAt: 0, updatedAt: 0 }, workspaceRoot: '/x', overview: 'Languages: C#', memories: [], task }, 'ciao');
+  assert.match(msg, /Project: "Arena"/);
+  assert.match(msg, /Languages: C#/);
+  assert.ok(msg.endsWith('ciao'));
+  assert.doesNotMatch(systemPrompt('cmd.exe'), /Arena/);
+});

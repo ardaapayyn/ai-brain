@@ -49,8 +49,9 @@ const NEURON_VERT = /* glsl */ `
     vWave = waveAt(p);
     vFly = e;
     vColor = aColor;
-    gl_PointSize = aSize * uPixelRatio * (320.0 / -mv.z) * (1.0 + uActivity * 0.35 * vTwinkle) * (1.0 + vWave * 2.2) * mix(1.0, 2.8, uLight);
-    vNear = smoothstep(28.0, 170.0, -mv.z);
+    gl_PointSize = aSize * uPixelRatio * (320.0 / -mv.z) * (1.0 + uActivity * 0.35 * vTwinkle) * (1.0 + vWave * 1.4) * mix(1.0, 2.8, uLight);
+    // fade what is very close (inside the cloud) and dim the far half for depth
+    vNear = smoothstep(70.0, 270.0, -mv.z) * mix(1.0, 0.45, smoothstep(380.0, 700.0, -mv.z));
     gl_Position = projectionMatrix * mv;
   }
 `;
@@ -69,9 +70,9 @@ const NEURON_FRAG = /* glsl */ `
     if (d > 0.5) discard;
     float core = smoothstep(0.5, 0.0, d);
     float a = pow(core, 1.8) * vTwinkle * (0.55 + uActivity * 0.45) * vNear;
-    a = a * mix(0.42, 2.6, uLight) + vWave * core * 0.9;
+    a = a * mix(0.55, 2.6, uLight) + vWave * core * 0.55;
     a *= mix(0.35, 1.0, vFly);
-    vec3 col = mix(vColor * (1.0 + (1.0 - uLight) * 0.4 * vTwinkle), uWaveColor, clamp(vWave * 1.2, 0.0, 0.9));
+    vec3 col = mix(vColor * (1.0 + (1.0 - uLight) * 0.4 * vTwinkle), uWaveColor, clamp(vWave * 0.9, 0.0, 0.75));
     gl_FragColor = vec4(col, min(1.0, a));
   }
 `;
@@ -111,7 +112,7 @@ const SYNAPSE_FRAG = /* glsl */ `
     float rate = 0.10 + uActivity * 0.55;
     float fires = step(hash(idx * 1.7 + vPhase * 91.0), rate);
     float pulse = fires * smoothstep(0.14, 0.0, abs(fract(cycle) - vT));
-    float base = mix(0.03, 0.3, uLight) + uActivity * 0.03;
+    float base = mix(0.022, 0.26, uLight) + uActivity * 0.025;
     float a = (base + pulse * 0.65 + vWave * 0.7) * smoothstep(0.75, 1.0, uAssemble);
     vec3 col = mix(vColor, vec3(1.0), pulse * 0.6 * (1.0 - uLight));
     col = mix(col, uWaveColor, clamp(vWave, 0.0, 0.9));
@@ -129,33 +130,59 @@ function rand(seed: { s: number }) {
 
 export const BRAIN_RADIUS = 150;
 
-/** Sample a point on/in a stylised brain: 2 folded hemispheres, cerebellum, brain stem. */
-function brainPoint(r: () => number, out: THREE.Vector3) {
+/**
+ * Sample a point on a stylised but anatomically-readable brain:
+ * two hemispheres split by a clear longitudinal fissure, visible gyri (points are concentrated on
+ * fold ridges), temporal lobes, a cerebellum and the brain stem. Front of the brain is +z.
+ */
+function brainPoint(r: () => number, out: THREE.Vector3): THREE.Vector3 {
   const R = BRAIN_RADIUS;
   const pick = r();
-  if (pick < 0.84) {
-    const side = r() < 0.5 ? -1 : 1;
-    const u = new THREE.Vector3(r() * 2 - 1, r() * 2 - 1, r() * 2 - 1);
-    while (u.lengthSq() > 1 || u.lengthSq() < 1e-4) u.set(r() * 2 - 1, r() * 2 - 1, r() * 2 - 1);
-    u.normalize();
-    if (u.x * side < 0) u.x *= 0.18; // flatten the medial wall
-    const theta = Math.atan2(u.z, u.y);
-    const phi = Math.acos(THREE.MathUtils.clamp(u.x, -1, 1));
-    const sulci = 1 + 0.055 * Math.sin(theta * 9 + phi * 4) * Math.sin(phi * 7 + theta * 2);
-    const shell = r() < 0.8 ? 0.86 + 0.14 * Math.sqrt(r()) : Math.cbrt(r()) * 0.85;
-    const rr = R * shell * sulci;
-    out.set(u.x * rr * 0.62 + side * R * 0.07, u.y * rr * 0.78 + R * 0.05, u.z * rr * 1.0);
-  } else if (pick < 0.95) {
-    const u = new THREE.Vector3(r() * 2 - 1, r() * 2 - 1, r() * 2 - 1).normalize();
-    const rr = R * 0.36 * (0.75 + 0.25 * Math.sqrt(r())) * (1 + 0.08 * Math.sin(u.y * 30));
-    out.set(u.x * rr * 1.25, u.y * rr * 0.6 - R * 0.52, u.z * rr * 0.8 - R * 0.62);
-  } else {
-    const a = r() * Math.PI * 2;
-    const rr = R * 0.1 * Math.sqrt(r());
-    const h = r();
-    out.set(Math.cos(a) * rr, -R * 0.35 - h * R * 0.55, Math.sin(a) * rr - R * 0.25 - h * R * 0.12);
+  if (pick < 0.86) {
+    for (let tries = 0; tries < 12; tries++) {
+      const side = r() < 0.5 ? -1 : 1;
+      const u = new THREE.Vector3(r() * 2 - 1, r() * 2 - 1, r() * 2 - 1);
+      if (u.lengthSq() > 1 || u.lengthSq() < 1e-4) continue;
+      u.normalize();
+      if (u.x * side < 0) u.x *= 0.08; // flat medial wall → deep fissure between hemispheres
+      const theta = Math.atan2(u.z, u.y);
+      const phi = Math.acos(THREE.MathUtils.clamp(u.x * side, -1, 1));
+      // gyri: sum of a few oriented waves; points prefer the ridges
+      const fold = Math.sin(theta * 7.0 + Math.sin(phi * 3.1) * 1.6) * 0.55 + Math.sin(phi * 9.0 + theta * 2.3) * 0.45;
+      const ridge = 1 - Math.abs(fold);
+      const surface = r() < 0.9;
+      if (surface && r() > 0.25 + 0.75 * ridge * ridge) continue;
+      const shell = surface ? 0.93 + 0.07 * Math.sqrt(r()) : 0.3 + 0.55 * Math.cbrt(r());
+      const rr = R * shell * (1 + 0.045 * fold);
+      let x = u.x * rr * 0.6 + side * R * 0.085;
+      let y = u.y * rr * 0.74 + R * 0.08;
+      let z = u.z * rr * 1.06;
+      // flatter base, fuller top
+      if (y < 0) y *= 0.82;
+      // temporal lobes: lateral-inferior bulge in the middle third
+      if (u.y < 0.05 && u.z > -0.35 && u.z < 0.55) {
+        const k = (1 - Math.abs(u.z - 0.1) / 0.45) * Math.min(1, -u.y * 3 + 0.2);
+        x += side * R * 0.07 * k;
+        y -= R * 0.06 * k;
+      }
+      // frontal lobe slightly narrower, occipital slightly lower
+      x *= 1 - 0.08 * Math.max(0, u.z);
+      if (u.z < -0.5) y -= R * 0.04 * (-u.z - 0.5);
+      return out.set(x, y, z);
+    }
+    return out.set(0, R * 0.2, 0);
   }
-  return out;
+  if (pick < 0.96) {
+    // cerebellum: small, finely striped, back-bottom
+    const u = new THREE.Vector3(r() * 2 - 1, r() * 2 - 1, r() * 2 - 1).normalize();
+    const stripes = 1 + 0.06 * Math.sin(u.y * 42);
+    const rr = R * 0.33 * (0.82 + 0.18 * Math.sqrt(r())) * stripes;
+    return out.set(u.x * rr * 1.3, u.y * rr * 0.55 - R * 0.5, u.z * rr * 0.75 - R * 0.6);
+  }
+  const a = r() * Math.PI * 2;
+  const rr = R * 0.09 * Math.sqrt(r());
+  const h = r();
+  return out.set(Math.cos(a) * rr, -R * 0.32 - h * R * 0.55, Math.sin(a) * rr - R * 0.22 - h * R * 0.14);
 }
 
 export class NeuralField {
@@ -224,7 +251,7 @@ export class NeuralField {
     const segT: number[] = [];
     const segPhase: number[] = [];
     this.synapseMix = [];
-    const sources = Math.floor(count * 0.45);
+    const sources = Math.floor(count * 0.3);
     for (let n = 0; n < sources; n++) {
       const i = Math.floor(r() * count);
       const px = P[i * 3], py = P[i * 3 + 1], pz = P[i * 3 + 2];

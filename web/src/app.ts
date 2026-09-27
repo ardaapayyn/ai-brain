@@ -65,6 +65,7 @@ export class App {
       autoRotate: prefs.autoRotate,
     });
     this.scene.graph.setHidden(prefs.hiddenTypes);
+    this.scene.gpuSaver = prefs.gpuSaver;
 
     this.hudRight = new HudRight(
       {
@@ -80,7 +81,11 @@ export class App {
       this.scene.graph.setHidden(hidden);
     });
     this.command = new CommandBar({
-      submit: (p) => this.submit(p),
+      submit: (p, mode) => this.submit(p, mode),
+      modeChanged: (mode) => savePrefs({ mode }),
+      warmup: (mode) => {
+        if (state.connected) api.warmup(mode).catch(() => {});
+      },
       stop: (runId) => api.cancelRun(runId).catch((e) => toast(e.message, 'error')),
       chooseProject: (id) => {
         this.setProject(id);
@@ -92,6 +97,7 @@ export class App {
         this.renderContext();
       },
     });
+    this.command.setMode(prefs.mode);
     this.activity = new ActivityPanel({
       close: () => this.activity.hide(),
       cancel: (id) => api.cancelRun(id).catch((e) => toast(e.message, 'error')),
@@ -221,6 +227,7 @@ export class App {
       setTheme: (t) => this.setTheme(t),
       setAutoRotate: (on) => this.scene.setAutoRotate(on),
       setReducedMotion: (on) => document.body.classList.toggle('reduced', on),
+      setGpuSaver: (on) => (this.scene.gpuSaver = on),
       onSaved: () => this.loadStatus(),
       toast: (m, e) => toast(m, e ? 'error' : 'ok'),
       subscribePull: (fn) => {
@@ -442,9 +449,9 @@ export class App {
     return [...state.runs.values()].sort((a, b) => b.startedAt - a.startedAt)[0];
   }
 
-  private async submit(prompt: string): Promise<boolean> {
+  private async submit(prompt: string, mode: 'auto' | 'fast' | 'deep'): Promise<boolean> {
     try {
-      await api.startRun(prompt, state.projectId, state.followTaskId);
+      await api.startRun(prompt, state.projectId, state.followTaskId, mode);
       state.followTaskId = undefined;
       this.welcomeDismissed = true;
       this.renderContext();

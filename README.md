@@ -109,6 +109,13 @@ e in **Impostazioni → Provider** scegli `llama-cpp` (oppure `"active": "llama-
 
 **Interfaccia:** minimale — solo il cervello e la barra comandi; i controlli si dissolvono quando non muovi il mouse (modalità zen) e lo stato del modello è il puntino sull'icona impostazioni. Intro in cui il cervello si assembla, legenda richiudibile per mostrare/nascondere tipi di nodi, etichette senza sovrapposizioni, tooltip sui nodi, focus sul vicinato del nodo selezionato, onde d'urto quando un task parte o finisce, nucleo con anelli che accelerano quando l'AI lavora, token/s e grafico dell'attività in tempo reale, command palette, suggerimenti di prompt, qualità grafica regolabile (Alta/Media/Bassa) e animazioni ridotte.
 
+**Velocità — modalità Auto / Veloce / Profondo** (pulsante nella barra comandi):
+- *Auto* (default): domande e richieste brevi vanno al modello veloce (`qwen3:8b`, tutto in GPU, ragionamento disattivato → risposte in pochi secondi); analisi, bug, refactoring e modifiche vanno al modello profondo (`qwen3-coder:30b`).
+- Il modello viene pre‑caricato all'avvio e mentre scrivi; la parte fissa del prompt (istruzioni + strumenti) resta in cache in Ollama, così ogni richiesta elabora solo il testo nuovo.
+- La card "sto pensando" mostra la fase reale: *carico il modello* (solo la prima volta), *leggo il contesto* (con i token), *ragiono* (con il ragionamento in diretta), poi la risposta in streaming.
+- Mentre l'AI lavora il cervello 3D anima a 30 fps e adatta la risoluzione, per lasciare la GPU al modello (disattivabile in Impostazioni → Aspetto).
+- Se anche le risposte veloci sono lente, controlla con `ollama ps` che il modello sia sulla GPU (vedi *GPU AMD* sopra).
+
 **Autonomia** (Impostazioni): per ogni classe di azione scegli `auto`, `chiedi` o `solo rischiosi`. Default: modifiche ai file automatiche (annullabili), eliminazioni e commit su conferma, terminale su conferma tranne build/test/comandi di sola lettura, test automatici.
 
 ---
@@ -164,7 +171,7 @@ Tutto in `~/.ai-brain` (configurabile): `brain.json` (progetti, task, ricordi, e
 ## Sviluppo
 
 ```bash
-npm test            # 29 test: unità, provider (server Ollama/OpenAI finti), agente end-to-end, API/WebSocket
+npm test            # 32 test: unità, provider (server Ollama/OpenAI finti), agente end-to-end, API/WebSocket
 npm run typecheck
 npm run build
 ```

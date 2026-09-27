@@ -12,12 +12,18 @@ import { buildIndex, renderOverview, type ProjectIndex } from '../workspace/inde
 import { SandboxError, Workspace } from '../workspace/workspace.js';
 import { ApprovalManager } from './approvals.js';
 import { compactMessages } from './context.js';
-import { NUDGE_EMPTY, NUDGE_LAST_STEPS, NUDGE_REPEAT, NUDGE_VERIFY, systemPrompt } from './prompts.js';
+import { contextMessage, NUDGE_EMPTY, NUDGE_LAST_STEPS, NUDGE_REPEAT, NUDGE_VERIFY, systemPrompt } from './prompts.js';
+import { ProviderUnavailableError } from '../llm/types.js';
+import { totalTokens } from './context.js';
+
+export type RunMode = 'auto' | 'fast' | 'deep';
 
 export interface StartRunInput {
   prompt: string;
   projectId?: string | null;
   taskId?: string;
+  /** fast = small model fully on GPU (quick answers); deep = main coding model; auto = decide from the request. */
+  mode?: RunMode;
 }
 
 interface ActiveRun {
@@ -26,7 +32,20 @@ interface ActiveRun {
   projectId: string | null;
   abort: AbortController;
   promise: Promise<void>;
+  provider: LLMProvider;
+  mode: 'fast' | 'deep';
 }
+
+/** Requests that clearly need real engineering go to the big model; quick asks go to the fast one. */
+const DEEP_HINTS =
+  /\b(analizz|sistem|corregg|fix|bug|refactor|implement|aggiung|crea|scriv|test|miglior|ottimizz|debug|architett|feature|funzional|error|crash|perform|review|rivedi|riscriv|migr|convert|build|compila|deploy|analy[sz]|improve|optimi[sz]|write|create|add)/i;
+
+export function classifyRequest(prompt: string): 'fast' | 'deep' {
+  if (prompt.length > 220 || prompt.split('\n').length > 3 || prompt.includes('```')) return 'deep';
+  return DEEP_HINTS.test(prompt) ? 'deep' : 'fast';
+}
+
+const shellName = (cfg: BrainConfig) => (process.platform === 'win32' ? (cfg.shell.windows === 'powershell' ? 'PowerShell' : 'cmd.exe') : '/bin/sh');
 
 const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'delete_file']);
 const VERIFY_TOOLS = new Set(['run_tests', 'run_command']);
@@ -38,6 +57,7 @@ const VERIFY_TOOLS = new Set(['run_tests', 'run_command']);
 export class Orchestrator {
   readonly approvals: ApprovalManager;
   private active = new Map<string, ActiveRun>();
+  private warmed = new Map<string, number>();
   private indexes = new Map<string, { idx: ProjectIndex; stale: boolean }>();
 
   constructor(
@@ -89,8 +109,34 @@ export class Orchestrator {
     if (c) c.stale = true;
   }
 
+  // ── model selection & warm-up ───────────────────────────────
+  private pick(mode: RunMode, prompt: string): { provider: LLMProvider; mode: 'fast' | 'deep' } {
+    const router = this.deps.llm as LLMProvider & { provider?(id?: string): LLMProvider | undefined; fastId?: string };
+    const fast = router.provider?.(router.fastId);
+    const want = mode === 'auto' ? classifyRequest(prompt) : mode;
+    return want === 'fast' && fast ? { provider: fast, mode: 'fast' } : { provider: this.deps.llm, mode: 'deep' };
+  }
+
+  /**
+   * Load a model and pre-fill Ollama's prompt cache with the static system prompt + tool schemas,
+   * so the first real request only has to process the user's message. Cheap to call repeatedly.
+   */
+  async warmup(mode: RunMode = 'auto'): Promise<{ model: string; skipped?: boolean }> {
+    const { provider } = this.pick(mode === 'auto' ? 'fast' : mode, '');
+    const key = `${provider.id}:${provider.model}`;
+    if (Date.now() - (this.warmed.get(key) ?? 0) < 4 * 60_000) return { model: provider.model, skipped: true };
+    this.warmed.set(key, Date.now());
+    try {
+      await provider.warmup?.([{ role: 'system', content: systemPrompt(shellName(this.deps.config)) }], this.deps.tools.specs());
+    } catch (err) {
+      this.warmed.delete(key);
+      throw err;
+    }
+    return { model: provider.model };
+  }
+
   // ── runs ────────────────────────────────────────────────────
-  startRun(input: StartRunInput): { runId: string; taskId: string } {
+  startRun(input: StartRunInput): { runId: string; taskId: string; mode: 'fast' | 'deep'; model: string } {
     const { memory } = this.deps;
     const prompt = input.prompt.trim();
     if (!prompt) throw new Error('Empty prompt');
@@ -106,20 +152,21 @@ export class Orchestrator {
 
     if (!task) task = memory.addTask(projectId, titleFrom(prompt));
     const runId = 'run_' + randomUUID().replace(/-/g, '').slice(0, 12);
+    const picked = this.pick(input.mode ?? 'auto', prompt);
     memory.addRun(
-      { taskId: task.id, projectId, prompt, model: this.deps.llm.model, status: 'running', steps: 0, toolCalls: [], startedAt: Date.now() },
+      { taskId: task.id, projectId, prompt, model: picked.provider.model, status: 'running', steps: 0, toolCalls: [], startedAt: Date.now() },
       runId,
     );
     memory.updateTask(task.id, { status: 'active', runIds: [...task.runIds, runId] });
 
     const abort = new AbortController();
-    const run: ActiveRun = { id: runId, taskId: task.id, projectId, abort, promise: Promise.resolve() };
+    const run: ActiveRun = { id: runId, taskId: task.id, projectId, abort, promise: Promise.resolve(), provider: picked.provider, mode: picked.mode };
     this.active.set(runId, run);
     run.promise = this.execute(run, task.id, prompt).finally(() => {
       this.active.delete(runId);
       this.approvals.clearRun(runId);
     });
-    return { runId, taskId: task.id };
+    return { runId, taskId: task.id, mode: picked.mode, model: picked.provider.model };
   }
 
   cancel(runId: string): boolean {
@@ -168,7 +215,8 @@ export class Orchestrator {
   }
 
   private async execute(run: ActiveRun, taskId: string, prompt: string) {
-    const { memory, llm, tools } = this.deps;
+    const { memory, tools } = this.deps;
+    let llm = run.provider;
     const cfg = () => this.deps.config;
     const signal = run.abort.signal;
     const task = memory.getTask(taskId)!;
@@ -179,7 +227,7 @@ export class Orchestrator {
     let status: 'done' | 'failed' | 'cancelled' = 'done';
     let checkpoint: Checkpoint | undefined;
 
-    this.emit({ type: 'run.started', runId: run.id, taskId, projectId: run.projectId, prompt, model: llm.model });
+    this.emit({ type: 'run.started', runId: run.id, taskId, projectId: run.projectId, prompt, model: llm.model, mode: run.mode });
     this.emit({ type: 'graph.changed' });
 
     try {
@@ -188,18 +236,17 @@ export class Orchestrator {
       let overview: string | undefined;
       if (project) {
         try {
-          overview = renderOverview(await this.getIndex(run.projectId), 2500);
+          overview = renderOverview(await this.getIndex(run.projectId), run.mode === 'fast' ? 1000 : 2500);
         } catch {
           /* index is an optimization */
         }
       }
       const memories = memory.searchMemories(prompt + ' ' + task.title, { projectId: run.projectId, limit: 8 });
-      const shell = process.platform === 'win32' ? (cfg().shell.windows === 'powershell' ? 'PowerShell' : 'cmd.exe') : '/bin/sh';
-
       let messages: ChatMessage[] = [
-        { role: 'system', content: systemPrompt({ project, workspaceRoot: workspace.root, overview, memories, task, shell }) },
-        { role: 'user', content: prompt },
+        { role: 'system', content: systemPrompt(shellName(cfg())) },
+        { role: 'user', content: contextMessage({ project, workspaceRoot: workspace.root, overview, memories, task }, prompt) },
       ];
+      const toolTokens = Math.ceil(JSON.stringify(tools.specs()).length / 3.5);
 
       const ctx: ToolContext = {
         runId: run.id,
@@ -236,21 +283,42 @@ export class Orchestrator {
           messages.push({ role: 'user', content: NUDGE_LAST_STEPS });
         }
 
-        this.emit({ type: 'run.status', runId: run.id, phase: 'thinking', step });
         const budget = Math.floor(llm.contextTokens * 0.75) - 1500; // leave room for tools schema + answer
         messages = compactMessages(messages, Math.max(budget, 2000));
 
+        // Honest progress: loading the model / reading the prompt can take a while on a local PC.
+        const loaded = await llm.isLoaded?.().catch(() => undefined);
+        const ctxK = ((totalTokens(messages) + toolTokens) / 1000).toFixed(1);
+        this.emit({ type: 'run.status', runId: run.id, phase: loaded === false ? 'loading' : 'reading', step, detail: loaded === false ? llm.model : `${ctxK}K token` });
+
         let streamed = false;
-        const res = await llm.chat({
-          messages,
-          tools: tools.specs(),
-          signal,
-          onToken: (text) => {
-            streamed = true;
-            this.emit({ type: 'llm.token', runId: run.id, text });
-          },
-          onThinking: (text) => this.emit({ type: 'llm.thinking', runId: run.id, text }),
-        });
+        let reasoning = false;
+        const ask = () =>
+          llm.chat({
+            messages,
+            tools: tools.specs(),
+            signal,
+            onToken: (text) => {
+              if (!streamed) this.emit({ type: 'run.status', runId: run.id, phase: 'writing', step });
+              streamed = true;
+              this.emit({ type: 'llm.token', runId: run.id, text });
+            },
+            onThinking: (text) => {
+              if (!reasoning) this.emit({ type: 'run.status', runId: run.id, phase: 'reasoning', step });
+              reasoning = true;
+              this.emit({ type: 'llm.thinking', runId: run.id, text });
+            },
+          });
+        let res;
+        try {
+          res = await ask();
+        } catch (err) {
+          // fast model missing/unreachable → continue this run on the main model
+          if (!(err instanceof ProviderUnavailableError) || llm === this.deps.llm) throw err;
+          this.emit({ type: 'llm.fallback', runId: run.id, from: llm.model, to: this.deps.llm.model });
+          llm = this.deps.llm;
+          res = await ask();
+        }
         const served = (llm as any).lastServedBy as string | undefined;
         if (served && served !== (llm as any).active?.id) this.emit({ type: 'llm.fallback', runId: run.id, from: (llm as any).active?.id, to: served });
 

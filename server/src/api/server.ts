@@ -281,9 +281,18 @@ export function createServer(deps: ServerDeps) {
   });
   route('POST', '/api/runs', (_r, _p, body) => {
     try {
-      return orchestrator.startRun({ prompt: String(body?.prompt ?? ''), projectId: body?.projectId ?? null, taskId: body?.taskId });
+      const mode = ['fast', 'deep', 'auto'].includes(body?.mode) ? body.mode : 'auto';
+      return orchestrator.startRun({ prompt: String(body?.prompt ?? ''), projectId: body?.projectId ?? null, taskId: body?.taskId, mode });
     } catch (err: any) {
       throw new HttpError(400, err.message);
+    }
+  });
+  // Pre-load the model + cache the static prompt (called when the user starts typing).
+  route('POST', '/api/warmup', async (_r, _p, body) => {
+    try {
+      return await orchestrator.warmup(['fast', 'deep', 'auto'].includes(body?.mode) ? body.mode : 'auto');
+    } catch (err: any) {
+      return { error: err.message };
     }
   });
   route('GET', '/api/runs/:id', (_r, { id }) => {

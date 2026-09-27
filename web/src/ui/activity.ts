@@ -22,7 +22,60 @@ export const CATEGORY_COLOR: Record<string, string> = {
   planning: 'var(--pink)',
 };
 
-const PHASE: Record<string, string> = { thinking: 'Sta pensando', tool: 'Sta agendo', waiting_approval: 'Attende conferma', verifying: 'Sta verificando' };
+const PHASE: Record<string, string> = {
+  thinking: 'Sta pensando',
+  loading: 'Carica il modello',
+  reading: 'Legge il contesto',
+  reasoning: 'Ragiona',
+  writing: 'Scrive',
+  tool: 'Sta agendo',
+  waiting_approval: 'Attende conferma',
+  verifying: 'Sta verificando',
+};
+
+const THINK_TITLE: Record<string, string> = {
+  loading: 'Carico il modello in memoria',
+  reading: 'Leggo il contesto',
+  reasoning: 'Sto ragionando',
+  thinking: 'Sto pensando',
+  verifying: 'Controllo il lavoro',
+};
+
+/** Live "the model is working" card: neural waveform + real phase + elapsed time + reasoning preview. */
+class ThinkingCard {
+  readonly el = h('div', { class: 'think' });
+  private title = h('div', { class: 'think-title' });
+  private sub = h('div', { class: 'think-sub' });
+  private preview = h('div', { class: 'think-preview' });
+  private time = h('span', { class: 'think-time' });
+
+  constructor() {
+    const wave = h('div', { class: 'think-wave' });
+    for (let i = 0; i < 32; i++) wave.append(h('i', { style: `animation-delay:${(-i * 0.09).toFixed(2)}s` }));
+    this.el.append(h('div', { class: 'think-orb' }, h('span'), h('span'), h('span')), h('div', { class: 'think-body' }, h('div', { class: 'think-head' }, this.title, this.time), this.sub, wave, this.preview));
+  }
+
+  update(run: RunView) {
+    const phase = run.phase ?? 'thinking';
+    this.el.dataset.phase = phase;
+    const secs = Math.max(0, Math.round((Date.now() - run.phaseSince) / 1000));
+    this.title.textContent = THINK_TITLE[phase] ?? 'Sto pensando';
+    this.time.textContent = `${secs}s`;
+    const sub =
+      phase === 'loading'
+        ? `${run.phaseDetail ?? run.model} · solo al primo utilizzo, poi resta in memoria`
+        : phase === 'reading'
+          ? `${run.phaseDetail ?? ''}${run.phaseDetail ? ' · ' : ''}${run.mode === 'fast' ? 'modello veloce' : 'modello profondo'}`
+          : phase === 'reasoning'
+            ? 'il modello riflette prima di rispondere'
+            : run.model;
+    if (this.sub.textContent !== sub) this.sub.textContent = sub;
+    const last = run.items.at(-1);
+    const text = last?.kind === 'reasoning' && last.streaming ? last.text.replace(/\s+/g, ' ').trim().slice(-220) : '';
+    this.preview.textContent = text;
+    this.preview.style.display = text ? '' : 'none';
+  }
+}
 const STATUS: Record<RunView['status'], [string, string]> = {
   running: ['Al lavoro', 'var(--amber)'],
   done: ['Completato', 'var(--green)'],
@@ -47,7 +100,7 @@ export class ActivityPanel {
   private foot = h('footer', { class: 'p-foot' });
   private planWrap = h('div');
   private tl = h('div', { class: 'tl' });
-  private wait = h('div', { class: 'tl-wait' }, h('i'), h('i'), h('i'));
+  private thinking = new ThinkingCard();
   private reportWrap = h('div');
   private views: ItemView[] = [];
   private run?: RunView;
@@ -59,7 +112,7 @@ export class ActivityPanel {
 
   constructor(private a: ActivityActions) {
     this.el.style.display = 'none';
-    this.body.append(this.planWrap, h('div', { class: 'eyebrow' }, icon('sparkles', 12), 'Attività'), this.tl, this.wait, this.reportWrap);
+    this.body.append(this.planWrap, h('div', { class: 'eyebrow' }, icon('sparkles', 12), 'Attività'), this.tl, this.thinking.el, this.reportWrap);
     this.el.append(this.head, this.body, this.foot);
   }
 
@@ -108,8 +161,11 @@ export class ActivityPanel {
     this.renderHead(run);
     this.renderPlan(run.plan);
     this.renderTimeline(run);
-    const thinking = run.status === 'running' && run.phase !== 'tool' && run.phase !== 'waiting_approval' && !(run.items.at(-1)?.kind === 'thought' && (run.items.at(-1) as any).streaming);
-    this.wait.style.display = thinking ? '' : 'none';
+    const last = run.items.at(-1);
+    const writing = last?.kind === 'thought' && last.streaming;
+    const thinking = run.status === 'running' && !['tool', 'waiting_approval', 'writing'].includes(run.phase ?? '') && !writing;
+    this.thinking.el.style.display = thinking ? '' : 'none';
+    if (thinking) this.thinking.update(run);
     this.renderReport(run);
     this.renderFoot(run);
     if (scrollToEnd || nearBottom) this.body.scrollTop = this.body.scrollHeight;
@@ -128,7 +184,7 @@ export class ActivityPanel {
       h(
         'div',
         { class: 'p-meta' },
-        h('span', null, icon('cpu', 12), h('b', null, run.model)),
+        h('span', null, icon(run.mode === 'fast' ? 'bolt' : 'cpu', 12), h('b', null, run.model)),
         h('span', null, icon('clock', 12), duration(elapsed)),
         h('span', null, icon('bolt', 12), `step ${run.step}`),
         run.status === 'running' && this.tps ? h('span', null, icon('gauge', 12), `${this.tps.toFixed(0)} tok/s`) : null,
@@ -184,6 +240,37 @@ export class ActivityPanel {
         }
         body.innerHTML = markdown(it.text);
         body.classList.toggle('streaming', it.streaming);
+        return;
+      }
+      case 'reasoning': {
+        if (it.streaming) {
+          // live reasoning is shown inside the thinking card; keep this slot empty until done
+          el.className = 'tl-item tl-hidden';
+          el.replaceChildren();
+          return;
+        }
+        const words = it.text.trim().split(/\s+/).length;
+        el.className = 'tl-item';
+        el.replaceChildren(
+          h('div', { class: 'tl-icon', style: '--c:var(--fg-3)' }, icon('sparkles', 14)),
+          h(
+            'div',
+            { class: 'tl-body' },
+            h(
+              'button',
+              {
+                class: `reason ${it.open ? 'open' : ''}`,
+                onclick: () => {
+                  it.open = !it.open;
+                  this.invalidate();
+                },
+              },
+              `Ragionamento · ${words} parole`,
+              icon('chevron', 13),
+            ),
+            it.open ? h('div', { class: 'reason-text' }, it.text.trim()) : null,
+          ),
+        );
         return;
       }
       case 'note':
@@ -291,6 +378,8 @@ function signature(it: TimelineItem, status: string, open: Set<string>): string 
       return `t|${it.text.length}|${it.streaming}`;
     case 'note':
       return `n|${it.text}`;
+    case 'reasoning':
+      return `r|${it.streaming}|${it.open}|${it.streaming ? 0 : it.text.length}`;
     case 'tool':
       return `x|${it.status}|${it.preview.length}|${it.live.length}|${it.durationMs}|${open.has(it.callId)}|${open.has(it.callId + ':closed')}`;
     case 'approval':

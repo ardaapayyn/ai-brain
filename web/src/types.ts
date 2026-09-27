@@ -116,8 +116,8 @@ export interface Settings {
 
 export type BrainEvent =
   | { type: 'hello'; activeRuns: Graph['activeRuns']; pendingApprovals: Approval[] }
-  | { type: 'run.started'; runId: string; taskId: string; projectId: string | null; prompt: string; model: string }
-  | { type: 'run.status'; runId: string; phase: 'thinking' | 'tool' | 'waiting_approval' | 'verifying'; step: number; detail?: string }
+  | { type: 'run.started'; runId: string; taskId: string; projectId: string | null; prompt: string; model: string; mode?: 'fast' | 'deep' }
+  | { type: 'run.status'; runId: string; phase: 'thinking' | 'loading' | 'reading' | 'reasoning' | 'writing' | 'tool' | 'waiting_approval' | 'verifying'; step: number; detail?: string }
   | { type: 'llm.token'; runId: string; text: string }
   | { type: 'llm.thinking'; runId: string; text: string }
   | { type: 'llm.message'; runId: string; content: string; step: number }

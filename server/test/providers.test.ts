@@ -138,3 +138,25 @@ test('hardware recommendation matches the reference PC', async () => {
   assert.equal(recommend(16, 4).main, 'qwen3:8b');
   assert.equal(recommend(8, 0).main, 'qwen3:4b');
 });
+
+test('Ollama: think flag only for switchable models, same num_ctx for warm-up and chat', async () => {
+  const bodies: any[] = [];
+  const s = await serve((req, body, res) => {
+    bodies.push({ url: req.url, body });
+    if (req.url === '/api/ps') return res.end(JSON.stringify({ models: [{ name: 'qwen3:8b' }] }));
+    res.end(JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n');
+  });
+  const fast = new OllamaProvider('fast', { type: 'ollama', baseUrl: s.url, model: 'qwen3:8b', contextTokens: 16384, think: false });
+  const coder = new OllamaProvider('main', { type: 'ollama', baseUrl: s.url, model: 'qwen3-coder:30b', contextTokens: 32768, think: false });
+  await fast.warmup([{ role: 'system', content: 'sys' }], tools);
+  await fast.chat({ messages: [{ role: 'user', content: 'hi' }], tools });
+  await coder.chat({ messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal(bodies[0].body.think, false);
+  assert.equal(bodies[0].body.options.num_predict, 1);
+  assert.equal(bodies[0].body.options.num_ctx, bodies[1].body.options.num_ctx);
+  assert.equal(bodies[1].body.think, false);
+  assert.equal(bodies[2].body.think, undefined); // qwen3-coder has no thinking switch
+  assert.equal(await fast.isLoaded(), true);
+  assert.equal(await coder.isLoaded(), false);
+  s.close();
+});

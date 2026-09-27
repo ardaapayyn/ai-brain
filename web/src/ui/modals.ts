@@ -141,6 +141,7 @@ export interface SettingsOptions {
   setTheme(t: 'dark' | 'light'): void;
   setAutoRotate(on: boolean): void;
   setReducedMotion(on: boolean): void;
+  setGpuSaver(on: boolean): void;
   onSaved(): void;
   toast(m: string, e?: boolean): void;
   subscribePull(fn: PullListener): () => void;
@@ -279,6 +280,7 @@ export async function openSettings(o: SettingsOptions) {
     ),
     h('div', { class: 'policy' }, h('div', null, 'Rotazione automatica', h('small', null, 'Il cervello ruota lentamente quando non lo tocchi')), toggle(prefs.autoRotate, (v) => (savePrefs({ autoRotate: v }), o.setAutoRotate(v)))),
     h('div', { class: 'policy' }, h('div', null, 'Animazioni ridotte', h('small', null, 'Meno movimento nell’interfaccia')), toggle(prefs.reducedMotion, (v) => (savePrefs({ reducedMotion: v }), o.setReducedMotion(v)))),
+    h('div', { class: 'policy' }, h('div', null, 'Risparmia GPU mentre l’AI lavora', h('small', null, 'Il cervello anima a 30 fps durante i task: il modello locale risponde più in fretta')), toggle(prefs.gpuSaver, (v) => (savePrefs({ gpuSaver: v }), o.setGpuSaver(v)))),
     h('div', { class: 'policy' }, h('div', null, 'Intro all’avvio', h('small', null, 'La sequenza in cui il cervello si assembla')), toggle(prefs.intro, (v) => savePrefs({ intro: v }))),
   );
 

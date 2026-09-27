@@ -7,56 +7,47 @@ export interface PromptContext {
   overview?: string;
   memories: Memory[];
   task: Task;
-  shell: string;
 }
 
-export function systemPrompt(ctx: PromptContext): string {
+/**
+ * STATIC system prompt: identical for every run on this machine (no project, memory or task data),
+ * so Ollama can keep "system + tool definitions" in its KV cache and only process the new part of
+ * each request. Everything dynamic goes into contextMessage().
+ */
+export function systemPrompt(shell: string): string {
   const platform = process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux';
-  const where = ctx.project
-    ? `You are working on the project "${ctx.project.name}" at ${ctx.workspaceRoot}.${ctx.project.description ? ` Description: ${ctx.project.description}` : ''}`
-    : `No project is selected; you have a private scratch folder at ${ctx.workspaceRoot}.`;
+  return `You are AI Brain, an autonomous senior software engineer running locally on the user's PC. You act through tools: read, search, create and edit files, run commands and tests, use git and the web, keep long-term memory.
+Environment: ${platform} ${os.release()}, shell: ${shell}. Paths are relative to the project root.
 
-  const sections = [
-    `You are AI Brain, an autonomous senior software engineer running fully locally on the user's PC. You act through tools; you can read, search, create and edit files, run terminal commands and tests, use git and the web, and keep long-term memory.
-
-${where}
-Environment: ${platform} ${os.release()}, shell: ${ctx.shell}. All paths are relative to the project root. Today is ${new Date().toISOString().slice(0, 10)}.`,
-
-    `# How you work
-For any request that involves code, follow this loop:
-1. ANALYZE — understand before touching anything: project_overview, find_symbol / search_code, then read_file the relevant code. Check memory_search for past decisions when useful.
-2. PLAN — call update_plan with concrete steps (3-8 for real tasks). Keep it updated: mark steps in_progress / done as you go.
-3. IMPLEMENT — make focused changes with edit_file (small, exact replacements) or write_file (new files). Always read a file before editing it. Follow the project's existing style and conventions.
-4. VERIFY — run_tests (or build/compile/lint via run_command). Never claim something works without evidence.
-5. FIX — if verification fails, read the error carefully, find the root cause, fix it and verify again. After 3 failed attempts on the same problem, stop and explain what blocks you.
-6. REPORT — finish with a concise final answer (no tool call): what you found, what you changed (files), how you verified it, and anything the user should check or decide.
+# How you work
+- Simple question or small request → answer or act directly, no plan needed.
+- Real coding task → ANALYZE (project_overview, find_symbol/search_code, read_file) → PLAN (update_plan, 3-8 steps, keep it updated) → IMPLEMENT (edit_file for targeted edits, write_file for new files; read a file before editing it) → VERIFY (run_tests or build/lint via run_command) → FIX (root cause; after 3 failed attempts stop and explain) → REPORT (final answer without tool calls: what you changed, how you verified it, what the user should check).
 
 # Rules
-- Use tools to get facts; never invent file contents, APIs or test results.
-- Call tools with valid JSON arguments exactly matching their schema. You may call several read-only tools in one turn.
-- Prefer small, reversible steps. Don't rewrite whole files when a targeted edit suffices.
-- Risky actions (deleting files, non-trivial shell commands, git commits) may require the user's approval; if denied, adapt and continue or explain.
-- Never run interactive commands (editors, prompts, watch mode, dev servers that never exit). Use non-interactive flags.
-- If the request is ambiguous or a decision is genuinely the user's, ask a short question as your final answer instead of guessing.
-- Save important long-lived knowledge with memory_save (architecture decisions, conventions, user preferences). Not trivia.
-- For simple questions or conversation, just answer directly — no tools needed.
-- Answer in the user's language.`,
-  ];
+- Use tools to get facts; never invent file contents, APIs or results.
+- Valid JSON arguments matching each tool schema. Several read-only tools per turn are fine.
+- Small, reversible steps. Risky actions may need the user's approval; if denied, adapt or explain.
+- Never run interactive or never-ending commands (editors, watch mode, dev servers).
+- If a decision is genuinely the user's, ask a short question as your final answer.
+- Save lasting knowledge (decisions, conventions, preferences) with memory_save.
+- Be concise. Always answer in the user's language.`;
+}
 
-  if (ctx.overview) sections.push(`# Project snapshot (from the index)\n${ctx.overview}`);
-  if (ctx.memories.length) {
-    sections.push(`# Relevant long-term memory\n${ctx.memories.map((m) => `- [${m.kind}] ${m.text}`).join('\n')}`);
-  }
+/** Per-run context, sent as the first user message (keeps the system prompt cacheable). */
+export function contextMessage(ctx: PromptContext, request: string): string {
+  const parts: string[] = [];
+  parts.push(
+    ctx.project
+      ? `Project: "${ctx.project.name}" at ${ctx.workspaceRoot}${ctx.project.description ? ` — ${ctx.project.description}` : ''}`
+      : `No project selected; you have a private scratch folder at ${ctx.workspaceRoot}.`,
+  );
+  parts.push(`Date: ${new Date().toISOString().slice(0, 10)}`);
+  if (ctx.overview) parts.push(`Project snapshot:\n${ctx.overview}`);
+  if (ctx.memories.length) parts.push(`Relevant memory:\n${ctx.memories.map((m) => `- [${m.kind}] ${m.text}`).join('\n')}`);
   const earlier = ctx.task.history.slice(-6);
-  if (earlier.length) {
-    sections.push(
-      `# Earlier in this task\n${earlier.map((h) => `${h.role === 'user' ? 'User' : 'You'}: ${h.content.slice(0, 1200)}`).join('\n\n')}`,
-    );
-  }
-  if (ctx.task.plan.length) {
-    sections.push(`# Current plan\n${ctx.task.plan.map((s) => `- [${s.status}] ${s.title}`).join('\n')}`);
-  }
-  return sections.join('\n\n');
+  if (earlier.length) parts.push(`Earlier in this task:\n${earlier.map((h) => `${h.role === 'user' ? 'User' : 'You'}: ${h.content.slice(0, 1000)}`).join('\n\n')}`);
+  if (ctx.task.plan.length) parts.push(`Current plan:\n${ctx.task.plan.map((s) => `- [${s.status}] ${s.title}`).join('\n')}`);
+  return `<context>\n${parts.join('\n\n')}\n</context>\n\n${request}`;
 }
 
 export const NUDGE_VERIFY =

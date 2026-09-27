@@ -6,7 +6,8 @@ export type TimelineItem =
   | { kind: 'thought'; text: string; streaming: boolean }
   | { kind: 'tool'; callId: string; tool: string; category: string; summary: string; status: 'running' | 'ok' | 'fail'; preview: string; live: string; durationMs?: number; open: boolean }
   | { kind: 'approval'; approval: Approval; resolved?: boolean; approved?: boolean }
-  | { kind: 'note'; text: string };
+  | { kind: 'note'; text: string }
+  | { kind: 'reasoning'; text: string; streaming: boolean; open: boolean };
 
 export interface RunView {
   runId: string;
@@ -17,6 +18,8 @@ export interface RunView {
   status: 'running' | 'done' | 'failed' | 'cancelled';
   phase?: string;
   phaseDetail?: string;
+  phaseSince: number;
+  mode?: 'fast' | 'deep';
   step: number;
   startedAt: number;
   endedAt?: number;
@@ -28,7 +31,7 @@ export interface RunView {
 }
 
 export function newRun(e: Extract<BrainEvent, { type: 'run.started' }>, at = Date.now()): RunView {
-  return { runId: e.runId, taskId: e.taskId, projectId: e.projectId, prompt: e.prompt, model: e.model, status: 'running', step: 0, startedAt: at, plan: [], items: [], filesTouched: [] };
+  return { runId: e.runId, taskId: e.taskId, projectId: e.projectId, prompt: e.prompt, model: e.model, mode: e.mode, status: 'running', step: 0, startedAt: at, phaseSince: at, plan: [], items: [], filesTouched: [] };
 }
 
 /** Pure-ish reducer shared by live streaming and replay of stored run logs. */
@@ -40,15 +43,28 @@ export function applyEvent(run: RunView, e: BrainEvent) {
   const endStream = () => {
     const t = lastThought();
     if (t) t.streaming = false;
+    endReasoning();
   };
+  function endReasoning() {
+    const r = run.items[run.items.length - 1];
+    if (r?.kind === 'reasoning') r.streaming = false;
+  }
   switch (e.type) {
     case 'run.status':
+      if (run.phase !== e.phase) run.phaseSince = Date.now();
       run.phase = e.phase;
       run.phaseDetail = e.detail;
       run.step = e.step;
       if (e.phase === 'verifying') run.items.push({ kind: 'note', text: '↻ verifica richiesta: l’agente deve testare le modifiche' });
       break;
+    case 'llm.thinking': {
+      const r = run.items[run.items.length - 1];
+      if (r?.kind === 'reasoning' && r.streaming) r.text += e.text;
+      else run.items.push({ kind: 'reasoning', text: e.text, streaming: true, open: false });
+      break;
+    }
     case 'llm.token': {
+      endReasoning();
       const t = lastThought();
       if (t) t.text += e.text;
       else run.items.push({ kind: 'thought', text: e.text, streaming: true });
@@ -56,6 +72,7 @@ export function applyEvent(run: RunView, e: BrainEvent) {
     }
     case 'llm.message': {
       // authoritative text for this step (also what replays use)
+      endReasoning();
       const t = lastThought();
       if (!e.content.trim()) {
         if (t) run.items.pop();

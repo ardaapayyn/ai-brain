@@ -32,6 +32,8 @@ async function main() {
     console.log(`\n  🧠 AI Brain server  →  http://${config.host}:${config.port}`);
     console.log(`     data dir         →  ${config.dataDir}`);
     console.log(`     LLM              →  ${config.llm.active} · ${llm.model}  ${health.ok ? '✓' : '✗'} ${health.detail}\n`);
+    // Load the quick model and prime its prompt cache so the first answer is fast.
+    if (health.ok) orchestrator.warmup('auto').catch(() => {});
   });
 
   const shutdown = () => {

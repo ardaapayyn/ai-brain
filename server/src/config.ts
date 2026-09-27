@@ -18,6 +18,8 @@ export interface ProviderConfig {
   temperature?: number;
   /** Ollama only: how long the model stays loaded in memory. */
   keepAlive?: string;
+  /** Reasoning ("thinking") for models that support toggling it (qwen3, deepseek-r1…). false = faster answers. */
+  think?: boolean;
 }
 
 export interface BrainConfig {
@@ -29,6 +31,8 @@ export interface BrainConfig {
     active: string;
     /** Tried in order when the active provider is unreachable. */
     fallbacks: string[];
+    /** Provider used for "fast" runs (short/simple requests). */
+    fast?: string;
     providers: Record<string, ProviderConfig>;
   };
   agent: {
@@ -70,6 +74,7 @@ export function defaultConfig(): BrainConfig {
     llm: {
       active: 'ollama',
       fallbacks: [],
+      fast: 'ollama-fast',
       providers: {
         ollama: {
           type: 'ollama',
@@ -86,6 +91,7 @@ export function defaultConfig(): BrainConfig {
           contextTokens: 16384,
           temperature: 0.2,
           keepAlive: '30m',
+          think: false,
         },
         'llama-cpp': {
           type: 'openai',

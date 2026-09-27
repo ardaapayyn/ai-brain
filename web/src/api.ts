@@ -34,7 +34,9 @@ export const api = {
   dirs: (path: string) => req<{ dirs: string[] }>('GET', `/api/fs/dirs?path=${encodeURIComponent(path)}`),
   task: (id: string) => req<{ task: Task; runs: RunRecord[] }>('GET', `/api/tasks/${id}`),
   removeTask: (id: string) => req('DELETE', `/api/tasks/${id}`),
-  startRun: (prompt: string, projectId: string | null, taskId?: string) => req<{ runId: string; taskId: string }>('POST', '/api/runs', { prompt, projectId, taskId }),
+  startRun: (prompt: string, projectId: string | null, taskId?: string, mode: 'auto' | 'fast' | 'deep' = 'auto') =>
+    req<{ runId: string; taskId: string; mode: 'fast' | 'deep'; model: string }>('POST', '/api/runs', { prompt, projectId, taskId, mode }),
+  warmup: (mode: 'auto' | 'fast' | 'deep') => req<{ model?: string; skipped?: boolean; error?: string }>('POST', '/api/warmup', { mode }),
   run: (id: string) => req<{ run: RunRecord; events: BrainEvent[] }>('GET', `/api/runs/${id}`),
   cancelRun: (id: string) => req('POST', `/api/runs/${id}/cancel`),
   revertRun: (id: string) => req<{ restored: string[] }>('POST', `/api/runs/${id}/revert`),
