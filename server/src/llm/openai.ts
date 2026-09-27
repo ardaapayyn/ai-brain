@@ -8,7 +8,12 @@ import { callId, extractTextToolCalls, parseArgs, providerFetch, readLines, spli
  * (set `apiKeyEnv` to the environment variable holding the key).
  */
 export class OpenAICompatProvider implements LLMProvider {
-  constructor(readonly id: string, private cfg: ProviderConfig) {}
+  /** `getKey` resolves the API key at request time (env var or the local secret store). */
+  constructor(readonly id: string, private cfg: ProviderConfig, private getKey?: () => string | undefined) {}
+
+  get remote() {
+    return !/^https?:\/\/(127\.|localhost|\[::1\]|0\.0\.0\.0)/i.test(this.cfg.baseUrl);
+  }
 
   get model() {
     return this.cfg.model;
@@ -21,7 +26,7 @@ export class OpenAICompatProvider implements LLMProvider {
   }
   private headers(): Record<string, string> {
     const h: Record<string, string> = { 'content-type': 'application/json' };
-    const key = this.cfg.apiKeyEnv ? process.env[this.cfg.apiKeyEnv] : undefined;
+    const key = (this.cfg.apiKeyEnv ? process.env[this.cfg.apiKeyEnv] : undefined) || this.getKey?.();
     if (key) h.authorization = `Bearer ${key}`;
     return h;
   }
@@ -122,7 +127,10 @@ export class OpenAICompatProvider implements LLMProvider {
       const models = await this.listModels();
       return { ok: true, detail: `${this.id} ready · ${this.cfg.model}`, models };
     } catch (err: any) {
-      return { ok: false, detail: `${this.id} not reachable at ${this.base} (${err.message})` };
+      if (this.remote && !this.getKey?.() && !(this.cfg.apiKeyEnv && process.env[this.cfg.apiKeyEnv])) {
+        return { ok: false, detail: `${this.id}: manca la API key — inseriscila in Impostazioni → Modello` };
+      }
+      return { ok: false, detail: /API key|credito|accesso/.test(err.message) ? err.message.split(' — ')[0] : `${this.id} non raggiungibile a ${this.base} (${err.message})` };
     }
   }
 }

@@ -10,18 +10,20 @@ import { EventBus } from '../src/events.js';
 import { LLMRouter } from '../src/llm/router.js';
 import { MemoryStore } from '../src/memory/store.js';
 import { ToolRegistry } from '../src/tools/registry.js';
+import { SecretStore } from '../src/secrets.js';
 import { ScriptedLLM, testConfig, tmpDir } from './helpers.js';
 
 async function boot(llmSteps: ConstructorParameters<typeof ScriptedLLM>[0]) {
   const dataDir = tmpDir('brain-api-');
   const config = testConfig(dataDir);
   config.port = 0;
-  config.llm = { active: 'scripted', fallbacks: [], providers: {} };
+  config.llm = { active: 'scripted', fallbacks: [], providers: { deepseek: { type: 'openai', baseUrl: 'https://api.deepseek.invalid/v1', model: 'deepseek-chat' } } };
   const bus = new EventBus();
   const memory = new MemoryStore(dataDir);
-  const llm = new LLMRouter(config.llm, [new ScriptedLLM(llmSteps)]);
+  const secrets = new SecretStore(dataDir);
+  const llm = new LLMRouter(config.llm, [new ScriptedLLM(llmSteps)], (id) => secrets.get(id));
   const orchestrator = new Orchestrator({ config, llm, tools: new ToolRegistry(), memory, bus });
-  const { server } = createServer({ config, bus, llm, memory, orchestrator });
+  const { server } = createServer({ config, bus, llm, memory, orchestrator, secrets });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
   config.port = port;
@@ -34,7 +36,7 @@ async function boot(llmSteps: ConstructorParameters<typeof ScriptedLLM>[0]) {
     });
     return { status: res.status, data: (await res.json()) as any };
   };
-  return { server, port, base, call, orchestrator };
+  return { server, port, base, call, orchestrator, dataDir };
 }
 
 test('API: cross-origin and foreign-host requests are rejected', async () => {
@@ -143,4 +145,24 @@ test('API: discover projects, browse folders, bulk-connect many folders', async 
   } finally {
     process.env.HOME = prevHome;
   }
+});
+
+test('API: API keys are write-only and stored outside the project', async () => {
+  const { server, call, dataDir } = await boot([() => ({ content: 'hi' })]);
+  const bad = await call('PUT', '/api/secrets', { provider: 'nope', apiKey: 'sk-1234567890' });
+  assert.equal(bad.status, 400);
+  const ok = await call('PUT', '/api/secrets', { provider: 'deepseek', apiKey: 'sk-test-secret-abcd' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.data.last4, 'abcd');
+  const { data: settings } = await call('GET', '/api/settings');
+  assert.equal(settings.llm.providers.deepseek.hasKey, true);
+  assert.equal(settings.llm.providers.deepseek.cloud, true);
+  assert.equal(settings.llm.providers.deepseek.keyHint, 'abcd');
+  assert.equal(JSON.stringify(settings).includes('sk-test-secret'), false);
+  // stored in the data dir, not in the project
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'secrets.json'), 'utf8')).deepseek, 'sk-test-secret-abcd');
+  await call('PUT', '/api/secrets', { provider: 'deepseek', apiKey: null });
+  const { data: after } = await call('GET', '/api/settings');
+  assert.equal(after.llm.providers.deepseek.hasKey, false);
+  server.close();
 });

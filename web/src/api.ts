@@ -36,6 +36,8 @@ export const api = {
   removeTask: (id: string) => req('DELETE', `/api/tasks/${id}`),
   startRun: (prompt: string, projectId: string | null, taskId?: string, mode: 'auto' | 'fast' | 'deep' = 'auto') =>
     req<{ runId: string; taskId: string; mode: 'fast' | 'deep'; model: string }>('POST', '/api/runs', { prompt, projectId, taskId, mode }),
+  setSecret: (provider: string, apiKey: string | null) =>
+    req<{ ok: boolean; last4?: string; health?: { ok: boolean; detail: string } }>('PUT', '/api/secrets', { provider, apiKey }),
   warmup: (mode: 'auto' | 'fast' | 'deep') => req<{ model?: string; skipped?: boolean; error?: string }>('POST', '/api/warmup', { mode }),
   run: (id: string) => req<{ run: RunRecord; events: BrainEvent[] }>('GET', `/api/runs/${id}`),
   cancelRun: (id: string) => req('POST', `/api/runs/${id}/cancel`),

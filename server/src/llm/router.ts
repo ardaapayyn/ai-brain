@@ -3,12 +3,14 @@ import { OllamaProvider } from './ollama.js';
 import { OpenAICompatProvider } from './openai.js';
 import { ProviderUnavailableError, type ChatRequest, type ChatResponse, type LLMProvider, type ProviderHealth } from './types.js';
 
-export function createProvider(id: string, cfg: ProviderConfig): LLMProvider {
+export const isRemoteUrl = (url: string) => !/^https?:\/\/(127\.|localhost|\[::1\]|0\.0\.0\.0)/i.test(url);
+
+export function createProvider(id: string, cfg: ProviderConfig, getKey?: (id: string) => string | undefined): LLMProvider {
   switch (cfg.type) {
     case 'ollama':
       return new OllamaProvider(id, cfg);
     case 'openai':
-      return new OpenAICompatProvider(id, cfg);
+      return new OpenAICompatProvider(id, cfg, getKey ? () => getKey(id) : undefined);
     default:
       throw new Error(`Unknown provider type "${(cfg as any).type}" for "${id}"`);
   }
@@ -26,14 +28,14 @@ export class LLMRouter implements LLMProvider {
   lastServedBy?: string;
 
   /** `extra` registers pre-built providers (tests, plugins) alongside the configured ones. */
-  constructor(private cfg: BrainConfig['llm'], extra: LLMProvider[] = []) {
+  constructor(private cfg: BrainConfig['llm'], extra: LLMProvider[] = [], private getKey?: (id: string) => string | undefined) {
     for (const p of extra) this.providers.set(p.id, p);
     this.reload(cfg);
   }
 
   reload(cfg: BrainConfig['llm']) {
     this.cfg = cfg;
-    for (const [id, pc] of Object.entries(cfg.providers)) this.providers.set(id, createProvider(id, pc));
+    for (const [id, pc] of Object.entries(cfg.providers)) this.providers.set(id, createProvider(id, pc, this.getKey));
     if (!this.providers.has(cfg.active)) throw new Error(`Active provider "${cfg.active}" is not configured`);
   }
 
@@ -60,8 +62,16 @@ export class LLMRouter implements LLMProvider {
     return id && id !== this.cfg.active && this.providers.has(id) ? id : undefined;
   }
 
+  /** Is the active model a cloud API (code leaves the PC, costs money)? */
+  get isRemote(): boolean {
+    const pc = this.cfg.providers[this.cfg.active];
+    return !!pc && isRemoteUrl(pc.baseUrl);
+  }
+
   private chain(): LLMProvider[] {
     const ids = [this.cfg.active, ...this.cfg.fallbacks.filter((f) => f !== this.cfg.active)];
+    // A cloud model always falls back to the local one (no key, no credit, offline…).
+    if (this.isRemote && this.providers.has('ollama') && !ids.includes('ollama')) ids.push('ollama');
     return ids.map((id) => this.providers.get(id)).filter((p): p is LLMProvider => !!p);
   }
 

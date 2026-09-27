@@ -100,6 +100,15 @@ export function defaultConfig(): BrainConfig {
           contextTokens: 32768,
           temperature: 0.2,
         },
+        // Cloud (optional). The key is entered in Settings and stored only on this PC.
+        deepseek: {
+          type: 'openai',
+          baseUrl: 'https://api.deepseek.com/v1',
+          model: 'deepseek-chat',
+          apiKeyEnv: 'DEEPSEEK_API_KEY',
+          contextTokens: 65536,
+          temperature: 0.2,
+        },
       },
     },
     agent: {

@@ -160,3 +160,47 @@ test('Ollama: think flag only for switchable models, same num_ctx for warm-up an
   assert.equal(await coder.isLoaded(), false);
   s.close();
 });
+
+test('Cloud provider: key from the secret store, friendly auth errors, automatic fallback to local', async () => {
+  let auth = '';
+  const cloud = await serve((req, _body, res) => {
+    auth = String(req.headers.authorization ?? '');
+    if (auth !== 'Bearer sk-good-key-1234') {
+      res.writeHead(402);
+      return res.end(JSON.stringify({ error: { message: 'Insufficient Balance' } }));
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'dal cloud' } }] })}\n\n`);
+    res.end('data: [DONE]\n\n');
+  });
+  const local = await serve((_req, _b, res) => res.end(JSON.stringify({ message: { content: 'dal locale' }, done: true }) + '\n'));
+  const keys: Record<string, string> = { cloud: 'sk-good-key-1234' };
+  const router = new LLMRouter(
+    {
+      active: 'cloud',
+      fallbacks: [],
+      providers: {
+        cloud: { type: 'openai', baseUrl: 'https://api.fake-cloud.test/v1', model: 'deepseek-chat' },
+        ollama: { type: 'ollama', baseUrl: local.url, model: 'qwen3-coder:30b' },
+      },
+    },
+    [],
+    (id) => keys[id],
+  );
+  try {
+  assert.equal(router.isRemote, true);
+  // point the "remote" provider at the fake server while keeping it remote-looking
+  const cp = router.provider('cloud') as any;
+  cp.cfg = { ...cp.cfg, baseUrl: cloud.url + '/v1' };
+  const r1 = await router.chat({ messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal(r1.content, 'dal cloud');
+  assert.equal(auth, 'Bearer sk-good-key-1234');
+  keys.cloud = 'sk-wrong';
+  const r2 = await router.chat({ messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal(r2.content, 'dal locale');
+  assert.equal(router.lastServedBy, 'ollama');
+  } finally {
+    cloud.close();
+    local.close();
+  }
+});

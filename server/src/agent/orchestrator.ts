@@ -111,9 +111,10 @@ export class Orchestrator {
 
   // ── model selection & warm-up ───────────────────────────────
   private pick(mode: RunMode, prompt: string): { provider: LLMProvider; mode: 'fast' | 'deep' } {
-    const router = this.deps.llm as LLMProvider & { provider?(id?: string): LLMProvider | undefined; fastId?: string };
+    const router = this.deps.llm as LLMProvider & { provider?(id?: string): LLMProvider | undefined; fastId?: string; isRemote?: boolean };
     const fast = router.provider?.(router.fastId);
-    const want = mode === 'auto' ? classifyRequest(prompt) : mode;
+    // With a cloud model active, "auto" uses it for everything: it is already fast.
+    const want = mode === 'auto' ? (router.isRemote ? 'deep' : classifyRequest(prompt)) : mode;
     return want === 'fast' && fast ? { provider: fast, mode: 'fast' } : { provider: this.deps.llm, mode: 'deep' };
   }
 

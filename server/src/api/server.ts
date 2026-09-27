@@ -10,6 +10,8 @@ import type { Orchestrator } from '../agent/orchestrator.js';
 import { browse, discoverProjects, fsRoots } from '../workspace/discover.js';
 import { renderOverview } from '../workspace/indexer.js';
 import { systemInfo } from '../system.js';
+import type { SecretStore } from '../secrets.js';
+import { isRemoteUrl } from '../llm/router.js';
 import { buildGraph } from './graph.js';
 
 export interface ServerDeps {
@@ -18,6 +20,7 @@ export interface ServerDeps {
   llm: LLMRouter;
   memory: MemoryStore;
   orchestrator: Orchestrator;
+  secrets?: SecretStore;
   staticDir?: string;
 }
 
@@ -108,13 +111,43 @@ export function createServer(deps: ServerDeps) {
     llm: {
       active: config.llm.active,
       fallbacks: config.llm.fallbacks,
-      providers: Object.fromEntries(Object.entries(config.llm.providers).map(([k, p]) => [k, { ...p, apiKeyEnv: p.apiKeyEnv ? '(env)' : undefined }])),
+      providers: Object.fromEntries(
+        Object.entries(config.llm.providers).map(([k, p]) => [
+          k,
+          {
+            ...p,
+            apiKeyEnv: undefined,
+            cloud: isRemoteUrl(p.baseUrl),
+            hasKey: !!(deps.secrets?.get(k) || (p.apiKeyEnv && process.env[p.apiKeyEnv])),
+            keyHint: deps.secrets?.summary()[k]?.last4,
+          },
+        ]),
+      ),
     },
     approvals: config.approvals,
     agent: config.agent,
   });
 
   route('GET', '/api/settings', () => publicSettings());
+
+  // API keys: write-only from the UI, stored in <dataDir>/secrets.json on this PC.
+  route('PUT', '/api/secrets', async (_r, _p, body) => {
+    if (!deps.secrets) throw new HttpError(500, 'Secret store not available');
+    const provider = String(body?.provider ?? '');
+    const pc = config.llm.providers[provider];
+    if (!pc) throw new HttpError(400, `Unknown provider ${provider}`);
+    if (body?.apiKey === null || body?.apiKey === '') {
+      deps.secrets.set(provider, null);
+      return { ok: true, removed: true };
+    }
+    const key = String(body?.apiKey ?? '').trim();
+    if (key.length < 10 || key.length > 400 || /\s/.test(key)) throw new HttpError(400, 'La API key non sembra valida');
+    deps.secrets.set(provider, key);
+    // verify it right away so the user gets immediate feedback
+    const p = llm.provider(provider);
+    const health = p ? await p.health() : { ok: false, detail: 'provider non trovato' };
+    return { ok: true, last4: key.slice(-4), health };
+  });
   route('PUT', '/api/settings', (_req, _p, body: RuntimeSettings) => {
     const patch: RuntimeSettings = {};
     if (body.llm?.active) {

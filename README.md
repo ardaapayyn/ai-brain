@@ -139,7 +139,19 @@ e in **Impostazioni → Provider** scegli `llama-cpp` (oppure `"active": "llama-
 
 Dettagli, flusso degli eventi e come estendere (nuovi strumenti, nuovi provider, modello cloud di fallback): **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
-### Aggiungere un modello cloud come fallback (senza toccare il codice)
+### DeepSeek (cloud, opzionale)
+Già configurato: serve solo la tua API key (https://platform.deepseek.com → API keys).
+
+1. Apri **Impostazioni** (ingranaggio) → **Modello** → Motore **deepseek**
+2. incolla la chiave → **Salva e verifica** → **Salva**
+   (oppure `Ctrl+K` → *Usa DeepSeek (cloud)*; per tornare: *Usa il modello locale*)
+
+- la chiave resta **solo su questo PC** in `~/.ai-brain/secrets.json`: mai nel progetto, mai su Git, e l'app non la rimostra
+- con DeepSeek attivo le richieste (e il codice che l'agente legge) vanno ai server DeepSeek e si paga a token — `deepseek-chat` costa pochi centesimi per decine di richieste; il prompt di sistema è fisso, quindi sfrutta la loro cache
+- se la chiave è sbagliata o il credito finisce, AI Brain **passa da solo al modello locale** e mostra un avviso
+- in alternativa alla UI: variabile d'ambiente `DEEPSEEK_API_KEY`
+
+### Aggiungere un altro modello cloud come fallback (senza toccare il codice)
 In `brain.config.json` (copia da `brain.config.example.json`):
 ```json
 {
@@ -152,7 +164,7 @@ In `brain.config.json` (copia da `brain.config.example.json`):
   }
 }
 ```
-La chiave si legge solo dalla variabile d'ambiente indicata, mai da file. Se Ollama non risponde, il router passa al fallback e la UI lo segnala.
+La chiave si legge dalla variabile d'ambiente indicata oppure si inserisce dalla UI (salvata in `~/.ai-brain/secrets.json`). Se Ollama non risponde, il router passa al fallback e la UI lo segnala.
 
 ---
 
@@ -166,12 +178,12 @@ La chiave si legge solo dalla variabile d'ambiente indicata, mai da file. Se Oll
 
 ## Dati
 
-Tutto in `~/.ai-brain` (configurabile): `brain.json` (progetti, task, ricordi, esecuzioni), `runs/*.jsonl` (log eventi per rivedere un'esecuzione), `checkpoints/` (snapshot per l'undo), `settings.json` (impostazioni dalla UI), `scratch/` (cartella di lavoro quando non è selezionato un progetto).
+Tutto in `~/.ai-brain` (configurabile): `brain.json` (progetti, task, ricordi, esecuzioni), `runs/*.jsonl` (log eventi per rivedere un'esecuzione), `checkpoints/` (snapshot per l'undo), `settings.json` (impostazioni dalla UI), `secrets.json` (API key cloud, solo locale), `scratch/` (cartella di lavoro quando non è selezionato un progetto).
 
 ## Sviluppo
 
 ```bash
-npm test            # 32 test: unità, provider (server Ollama/OpenAI finti), agente end-to-end, API/WebSocket
+npm test            # 34 test: unità, provider (server Ollama/OpenAI finti), agente end-to-end, API/WebSocket
 npm run typecheck
 npm run build
 ```

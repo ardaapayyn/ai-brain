@@ -38,9 +38,16 @@ export async function providerFetch(providerId: string, url: string, init: Reque
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    const msg = `${providerId}: HTTP ${res.status} ${text.slice(0, 500)}`;
-    // 404 on the model / 5xx means this provider can't serve us → allow fallback.
-    if (res.status === 404 || res.status >= 500) throw new ProviderUnavailableError(msg, providerId);
+    const friendly: Record<number, string> = {
+      401: 'API key mancante o non valida',
+      402: 'credito esaurito sul provider',
+      403: 'accesso negato dal provider',
+      429: 'troppe richieste o limite raggiunto, riprova tra poco',
+    };
+    const msg = `${providerId}: ${friendly[res.status] ? `${friendly[res.status]} — ` : ''}HTTP ${res.status} ${text.slice(0, 300)}`;
+    // Missing model, auth/credit problems, rate limits or server errors: this provider can't serve
+    // the request → let the router fall back (e.g. to the local model).
+    if ([401, 402, 403, 404, 429].includes(res.status) || res.status >= 500) throw new ProviderUnavailableError(msg, providerId);
     throw new Error(msg);
   }
   return res;

@@ -6,12 +6,14 @@ import { EventBus } from './events.js';
 import { LLMRouter } from './llm/router.js';
 import { MemoryStore } from './memory/store.js';
 import { ToolRegistry } from './tools/registry.js';
+import { SecretStore } from './secrets.js';
 
 async function main() {
   const config = loadConfig();
   const bus = new EventBus();
   const memory = new MemoryStore(config.dataDir);
-  const llm = new LLMRouter(config.llm);
+  const secrets = new SecretStore(config.dataDir);
+  const llm = new LLMRouter(config.llm, [], (id) => secrets.get(id));
   const tools = new ToolRegistry();
   const orchestrator = new Orchestrator({ config, llm, tools, memory, bus });
 
@@ -21,6 +23,7 @@ async function main() {
     llm,
     memory,
     orchestrator,
+    secrets,
     staticDir: path.join(REPO_ROOT, 'web', 'dist'),
   });
 

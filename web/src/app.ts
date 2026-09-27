@@ -128,6 +128,9 @@ export class App {
           { id: 'add', label: 'Aggiungi progetti', icon: 'folderPlus', run: () => this.addProject() },
           { id: 'settings', label: 'Impostazioni', icon: 'settings', run: () => this.openSettings() },
           { id: 'model', label: 'Cambia o scarica modello', icon: 'cpu', run: () => this.openSettings('model') },
+          state.status?.provider === 'deepseek'
+            ? { id: 'local', label: 'Usa il modello locale (gratis, privato)', icon: 'cpu', run: () => this.switchProvider('ollama') }
+            : { id: 'deepseek', label: 'Usa DeepSeek (cloud)', icon: 'web', run: () => this.switchProvider('deepseek') },
           { id: 'theme', label: `Tema ${state.theme === 'dark' ? 'chiaro' : 'scuro'}`, icon: state.theme === 'dark' ? 'sun' : 'moon', hint: 'T', run: () => this.setTheme(state.theme === 'dark' ? 'light' : 'dark') },
           { id: 'home', label: 'Vista d’insieme', icon: 'target', run: () => this.goHome() },
           { id: 'core', label: 'Stato del cervello e scorciatoie', icon: 'core', run: () => this.selectNode('core', true) },
@@ -235,6 +238,24 @@ export class App {
         return () => this.pullListeners.delete(fn);
       },
     };
+  }
+
+  /** Quick switch between the local model and a cloud provider (asks for the key if missing). */
+  private async switchProvider(id: string) {
+    try {
+      const settings = await api.settings();
+      const pc = settings.llm.providers[id];
+      if (!pc) return toast(`Provider ${id} non configurato`, 'error');
+      if (pc.cloud && !pc.hasKey) {
+        toast('Inserisci prima la API key di DeepSeek', 'info');
+        return this.openSettings('model');
+      }
+      await api.saveSettings({ llm: { active: id } });
+      await this.loadStatus();
+      toast(pc.cloud ? `Ora usi ${pc.model} (cloud)` : `Ora usi ${pc.model} in locale`);
+    } catch (err: any) {
+      toast(err.message, 'error');
+    }
   }
 
   private openSettings(tab?: SettingsOptions['tab']) {
@@ -357,6 +378,12 @@ export class App {
         h('span', null, 'Il modello ', h('code', null, s.model), ' non è ancora scaricato.'),
         h('button', { class: 'btn primary', style: 'height:30px', onclick: () => this.pull(s.model) }, icon('download', 14), 'Scarica ora'),
         h('button', { class: 'btn ghost', style: 'height:30px', onclick: () => this.openSettings('model') }, 'Scegli un altro'),
+      );
+    } else if (!s.llm.ok && /API key|credito|accesso negato/i.test(s.llm.detail)) {
+      this.banner.show(
+        h('span', null, s.llm.detail),
+        h('button', { class: 'btn primary', style: 'height:30px', onclick: () => this.openSettings('model') }, icon('shield', 14), 'Imposta la chiave'),
+        h('button', { class: 'btn ghost', style: 'height:30px', onclick: () => this.switchProvider('ollama') }, 'Usa il modello locale'),
       );
     } else if (!s.llm.ok) {
       this.banner.show(h('span', null, 'Il motore AI locale non risponde. Avvia ', h('code', null, 'AI-Brain.bat'), ' (lo avvia da solo) oppure Ollama.'), h('button', { class: 'btn ghost', style: 'height:30px', onclick: () => this.loadStatus() }, icon('refresh', 14), 'Riprova'));

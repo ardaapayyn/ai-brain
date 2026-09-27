@@ -109,7 +109,7 @@ export interface SystemInfo {
 export type ApprovalPolicy = 'auto' | 'ask' | 'ask-risky';
 
 export interface Settings {
-  llm: { active: string; fallbacks: string[]; providers: Record<string, { type: string; baseUrl: string; model: string; contextTokens?: number; temperature?: number }> };
+  llm: { active: string; fallbacks: string[]; providers: Record<string, { type: string; baseUrl: string; model: string; contextTokens?: number; temperature?: number; cloud?: boolean; hasKey?: boolean; keyHint?: string }> };
   approvals: Record<'fileWrite' | 'fileDelete' | 'shell' | 'tests' | 'git' | 'network', ApprovalPolicy>;
   agent: { maxSteps: number; maxToolOutputChars: number; requireVerification: boolean };
 }

@@ -159,6 +159,79 @@ export async function openSettings(o: SettingsOptions) {
 
   // ── Modello ──
   const modelPane = h('div', { class: 'pane' });
+
+  /** Cloud providers (DeepSeek…): API key stored only on this PC, known models, honest notes. */
+  const CLOUD_MODELS: Record<string, [string, string][]> = {
+    deepseek: [
+      ['deepseek-chat', 'veloce ed economico, usa gli strumenti — consigliato per l’agente'],
+      ['deepseek-reasoner', 'ragiona più a lungo prima di rispondere'],
+    ],
+  };
+  const cloudSection = (id: string, pc: Settings['llm']['providers'][string], ctxLabel: HTMLElement, range: HTMLInputElement): HTMLElement[] => {
+    const keyInput = h('input', { class: 'input mono', type: 'password', placeholder: pc.hasKey ? `chiave salvata ••••${pc.keyHint ?? ''}` : 'incolla qui la API key (sk-…)', autocomplete: 'off', spellcheck: false }) as HTMLInputElement;
+    const keyState = h('small', { class: pc.hasKey ? 'st-done' : 'faint', style: pc.hasKey ? 'color:var(--green)' : '' }, pc.hasKey ? `✓ chiave salvata (••••${pc.keyHint ?? ''})` : 'nessuna chiave');
+    const saveKey = async () => {
+      const key = keyInput.value.trim();
+      if (!key) return keyInput.focus();
+      keyState.textContent = 'verifico…';
+      try {
+        const r = await api.setSecret(id, key);
+        pc.hasKey = true;
+        pc.keyHint = r.last4;
+        keyInput.value = '';
+        keyInput.placeholder = `chiave salvata ••••${r.last4}`;
+        if (r.health?.ok) {
+          keyState.textContent = `✓ chiave valida (••••${r.last4})`;
+          keyState.setAttribute('style', 'color:var(--green)');
+          o.toast('Chiave verificata: DeepSeek è pronto');
+        } else {
+          keyState.textContent = `salvata, ma: ${r.health?.detail ?? 'verifica non riuscita'}`;
+          keyState.setAttribute('style', 'color:var(--amber)');
+        }
+      } catch (err: any) {
+        keyState.textContent = err.message;
+        keyState.setAttribute('style', 'color:var(--red)');
+      }
+    };
+    keyInput.addEventListener('keydown', (e) => e.key === 'Enter' && saveKey());
+    const known = CLOUD_MODELS[id] ?? [[pc.model, '']];
+    return [
+      h('div', { class: 'callout' }, icon('web', 15), h('span', null, h('b', null, 'Modello cloud: '), 'le richieste e il codice che l’agente legge vengono inviati al provider e il consumo si paga a token. Se la chiave manca o il credito finisce, AI Brain passa da solo al modello locale.')),
+      h(
+        'div',
+        { class: 'field' },
+        h('label', null, 'API key', keyState),
+        h('div', { class: 'row' }, h('div', { class: 'input-wrap', style: 'flex:1' }, icon('shield', 15), keyInput), h('button', { class: 'btn primary', onclick: saveKey }, icon('check', 14), 'Salva e verifica')),
+        h('small', { class: 'faint', style: 'font-size:11.5px' }, 'Salvata solo su questo PC (~/.ai-brain/secrets.json), mai nel progetto né su Git. L’app non la mostra più dopo il salvataggio.'),
+      ),
+      h(
+        'div',
+        { class: 'field' },
+        h('label', null, 'Modello'),
+        h(
+          'div',
+          { class: 'models' },
+          ...known.map(([name, note]) =>
+            h(
+              'button',
+              {
+                class: `model-card ${name === model ? 'on' : ''}`,
+                onclick: () => {
+                  model = name;
+                  drawModels();
+                },
+              },
+              h('span', { class: 'radio' }),
+              h('span', { class: 'name' }, name),
+              note ? h('small', { class: 'faint', style: 'font-size:11px' }, note) : null,
+            ),
+          ),
+        ),
+      ),
+      h('div', { class: 'field' }, h('label', null, 'Contesto massimo inviato', ctxLabel), range, h('small', { class: 'faint', style: 'font-size:11.5px' }, 'Meno contesto = meno token pagati per richiesta.')),
+    ];
+  };
+  const privacyNote = h('span', { class: 'faint', style: 'margin-right:auto;font-size:11.5px' }, 'Tutto resta sul tuo PC');
   const drawModels = () => {
     const rec = sys?.recommendation;
     const wanted = [...new Set([model, ...(rec ? [rec.main, rec.fast].filter(Boolean) : []), ...installed])] as string[];
@@ -181,6 +254,12 @@ export async function openSettings(o: SettingsOptions) {
       ctx = s.llm.providers[provider].contextTokens ?? 8192;
       drawModels();
     });
+    const pc = s.llm.providers[provider];
+    privacyNote.textContent = pc.cloud ? `Motore cloud: le richieste vanno a ${provider}` : 'Tutto resta sul tuo PC';
+    if (pc.cloud) {
+      modelPane.replaceChildren(h('div', { class: 'field' }, h('label', null, 'Motore'), providerSel), ...cloudSection(provider, pc, ctxLabel, range));
+      return;
+    }
     modelPane.replaceChildren(
       ...(rec ? [h('div', { class: 'callout' }, icon('sparkles', 15), h('span', null, 'Consigliato per il tuo PC: ', h('b', null, rec.main), rec.fast ? [' + ', h('b', null, rec.fast), ' (veloce)'] : '', `. ${rec.reason}.`))] : []),
       h('div', { class: 'field' }, h('label', null, 'Motore'), providerSel),
@@ -339,7 +418,7 @@ export async function openSettings(o: SettingsOptions) {
     subtitle: 'Modello, autonomia dell’agente e aspetto',
     tabs,
     body,
-    footer: [h('span', { class: 'faint', style: 'margin-right:auto;font-size:11.5px' }, 'Tutto resta sul tuo PC'), h('button', { class: 'btn', onclick: () => close() }, 'Chiudi'), h('button', { class: 'btn primary', onclick: save }, icon('check', 15), 'Salva')],
+    footer: [privacyNote, h('button', { class: 'btn', onclick: () => close() }, 'Chiudi'), h('button', { class: 'btn primary', onclick: save }, icon('check', 15), 'Salva')],
     onClose: unsub,
   });
 }
