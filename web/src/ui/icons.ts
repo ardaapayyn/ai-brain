@@ -43,6 +43,12 @@ const P: Record<string, string> = {
   folderOpen: '<path d="M3 17.5v-10A2.5 2.5 0 0 1 5.5 5H9l2 2h6.5A2.5 2.5 0 0 1 20 9.5V10"/><path d="M3 17.5 5.7 11.8A2 2 0 0 1 7.5 10.6h13a1 1 0 0 1 .9 1.4l-2.6 6.3a2.5 2.5 0 0 1-2.3 1.7H5.5A2.5 2.5 0 0 1 3 17.5z"/>',
   keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14h8"/>',
   bolt: '<path d="M13 2.5 4.5 13.5h6.5l-1 8 8.5-11h-6.5z"/>',
+  folderPlus: '<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/><path d="M12 10.5v6M9 13.5h6"/>',
+  chevronLeft: '<path d="m15 6-6 6 6 6"/>',
+  arrowLeft: '<path d="M19 12H5"/><path d="m11 18-6-6 6-6"/>',
+  drive: '<rect x="2.5" y="13" width="19" height="7" rx="2"/><path d="M5.5 13 8 5h8l2.5 8"/><path d="M17 16.5h.01"/>',
+  home: '<path d="m3 11 9-7.5 9 7.5"/><path d="M5 9.5V20h14V9.5"/><path d="M10 20v-5.5h4V20"/>',
+  radar: '<path d="M19.1 4.9A10 10 0 1 0 21.5 12"/><path d="M16.2 7.8A6 6 0 1 0 18 12"/><path d="M12 12 19 5"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/>',
   logo: '<circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7" opacity=".55"/><circle cx="12" cy="12" r="10.5" opacity=".25"/><circle cx="19" cy="7.5" r="1.3" fill="currentColor"/><circle cx="5.5" cy="15.5" r="1" fill="currentColor"/>',
 };
 

@@ -24,8 +24,9 @@ export interface CommandActions {
 /** The floating prompt bar: context chips, suggestions, live run status, animated aura. */
 export class CommandBar {
   readonly el = h('div', { class: 'command glass' });
-  readonly textarea = h('textarea', { rows: 1, placeholder: 'Chiedi al tuo cervello…', spellcheck: false }) as HTMLTextAreaElement;
-  private top = h('div', { class: 'cmd-top' });
+  readonly textarea = h('textarea', { rows: 1, placeholder: 'Chiedi qualcosa al tuo cervello…', spellcheck: false }) as HTMLTextAreaElement;
+  private top = h('div', { class: 'cmd-ctx' });
+  private follow = h('div', { class: 'cmd-follow' });
   private suggestions = h('div', { class: 'suggestions' });
   private status = h('div', { class: 'cmd-status' });
   private send = h('button', { class: 'send idle', title: 'Invia  (Enter)' }) as HTMLButtonElement;
@@ -37,7 +38,8 @@ export class CommandBar {
 
   constructor(private a: CommandActions) {
     this.send.append(icon('arrowUp', 19));
-    this.el.append(h('div', { class: 'aura' }), this.suggestions, this.top, h('div', { class: 'cmd-row' }, this.textarea, this.send), this.status);
+    this.el.append(h('div', { class: 'aura' }), this.suggestions, this.follow, h('div', { class: 'cmd-row' }, this.top, this.textarea, this.send), this.status);
+    this.follow.style.display = 'none';
     this.status.style.display = 'none';
     this.suggestions.style.display = 'none';
     this.textarea.addEventListener('input', () => this.onInput());
@@ -145,15 +147,15 @@ export class CommandBar {
 
   private renderTop() {
     const project = this.projects.find((p) => p.id === this.projectId);
-    const chip = h('button', { class: 'chip', title: 'Dove lavora l’agente' }, icon(project ? 'project' : 'sparkles', 13), project ? project.name : 'Nessun progetto', icon('chevron', 12));
+    const chip = h('button', { class: 'ctx-chip', title: 'Dove lavora l’agente' }, icon(project ? 'project' : 'sparkles', 14), h('span', null, project ? project.name : 'Ovunque'), icon('chevron', 12));
     chip.addEventListener('click', (e) => {
       e.stopPropagation();
       this.toggleMenu();
     });
-    const follow = this.followTitle
-      ? h('button', { class: 'chip', title: 'Il prossimo messaggio continua questo task — clic per annullare', onclick: () => this.a.clearFollow() }, icon('followUp', 13), `Continua: ${this.followTitle}`, icon('x', 12))
-      : null;
-    this.top.replaceChildren(chip, ...(follow ? [follow] : []), h('span', { class: 'cmd-hint' }, h('span', { class: 'kbd' }, '⏎'), 'invia', h('span', { class: 'kbd' }, '⇧⏎'), 'a capo', h('span', { class: 'kbd' }, '/'), 'scrivi'));
+    this.top.replaceChildren(chip);
+    this.follow.style.display = this.followTitle ? '' : 'none';
+    if (this.followTitle)
+      this.follow.replaceChildren(h('button', { class: 'chip', title: 'Il prossimo messaggio continua questo task — clic per annullare', onclick: () => this.a.clearFollow() }, icon('followUp', 13), `Continua: ${this.followTitle}`, icon('x', 12)));
   }
 
   private toggleMenu() {
@@ -167,9 +169,9 @@ export class CommandBar {
       'div',
       { class: 'menu glass scroll' },
       ...this.projects.map((p) => h('button', { class: p.id === this.projectId ? 'on' : '', onclick: () => choose(p.id) }, icon('project', 15), p.name, p.id === this.projectId ? h('small', null, 'attivo') : null)),
-      h('button', { class: this.projectId === null ? 'on' : '', onclick: () => choose(null) }, icon('sparkles', 15), 'Nessun progetto', h('small', null, 'cartella scratch')),
+      h('button', { class: this.projectId === null ? 'on' : '', onclick: () => choose(null) }, icon('sparkles', 15), 'Ovunque', h('small', null, 'nessun progetto')),
       h('hr'),
-      h('button', { onclick: () => (menu.remove(), this.a.addProject()) }, icon('plus', 15), 'Collega un progetto…'),
+      h('button', { onclick: () => (menu.remove(), this.a.addProject()) }, icon('folderPlus', 15), 'Aggiungi progetti…'),
     );
     this.top.append(menu);
     const off = (e: MouseEvent) => {

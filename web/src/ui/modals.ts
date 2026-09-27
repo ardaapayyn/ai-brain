@@ -6,7 +6,7 @@ import { icon } from './icons';
 
 export type PullListener = (e: { model: string; status: string; completed?: number; total?: number; done?: boolean; error?: string }) => void;
 
-function modal(opts: { icon: string; title: string; subtitle?: string; body: HTMLElement; footer: HTMLElement[]; tabs?: HTMLElement; onClose?: () => void }) {
+export function modal(opts: { icon: string; title: string; subtitle?: string; body: HTMLElement; footer: HTMLElement[]; tabs?: HTMLElement; onClose?: () => void }) {
   const close = () => {
     backdrop.remove();
     document.removeEventListener('keydown', onKey, true);

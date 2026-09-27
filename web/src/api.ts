@@ -1,4 +1,4 @@
-import type { BrainEvent, Graph, Memory, Project, RunRecord, Settings, Status, SystemInfo, Task } from './types';
+import type { BrainEvent, FolderInfo, Graph, Memory, Project, RunRecord, Settings, Status, SystemInfo, Task } from './types';
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -28,6 +28,9 @@ export const api = {
     ),
   removeProject: (id: string) => req('DELETE', `/api/projects/${id}`),
   reindex: (id: string) => req<{ files: number }>('POST', `/api/projects/${id}/reindex`),
+  discover: () => req<{ projects: FolderInfo[]; scanned: number; ms: number }>('GET', '/api/fs/discover'),
+  browse: (path?: string) => req<{ path: string; parent?: string; folders: FolderInfo[]; roots: FolderInfo[] }>('GET', `/api/fs/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  bulkProjects: (paths: string[]) => req<{ added: Project[]; existing: Project[]; failed: { path: string; error: string }[] }>('POST', '/api/projects/bulk', { paths }),
   dirs: (path: string) => req<{ dirs: string[] }>('GET', `/api/fs/dirs?path=${encodeURIComponent(path)}`),
   task: (id: string) => req<{ task: Task; runs: RunRecord[] }>('GET', `/api/tasks/${id}`),
   removeTask: (id: string) => req('DELETE', `/api/tasks/${id}`),

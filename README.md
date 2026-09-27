@@ -99,7 +99,7 @@ e in **Impostazioni → Provider** scegli `llama-cpp` (oppure `"active": "llama-
 
 ## Come si usa
 
-1. **+ Progetto** → scegli la cartella del progetto. Diventa un cluster nel cervello e viene indicizzato.
+1. **Aggiungi progetti** (icona cartella in alto a destra, o *Trova i miei progetti* al primo avvio): nella scheda **Trovati sul PC** AI Brain ha già cercato i progetti nelle cartelle più comuni (Desktop, Documenti, `source/repos`, Unity/Unreal Projects, altri dischi…) e ne riconosce il tipo (Unity, Unreal, Godot, Node, Python, Rust, .NET…); nella scheda **Sfoglia** navighi tra dischi e cartelle. Spunta tutte le cartelle che vuoi e collegale insieme: ognuna diventa un cluster nel cervello e viene indicizzata.
 2. Scrivi nella barra in basso, es. *«Analizza il mio progetto e sistema il combat system.»*
 3. Nel pannello a destra vedi in tempo reale piano, ragionamenti, strumenti usati e output del terminale; nel 3D gli impulsi mostrano dove sta lavorando.
 4. Se l'agente vuole fare qualcosa di rischioso compare una **richiesta di conferma** (Nega / Consenti / Consenti per questa esecuzione).
@@ -107,7 +107,7 @@ e in **Impostazioni → Provider** scegli `llama-cpp` (oppure `"active": "llama-
 
 **Comandi:** trascina = ruota · scroll = zoom · click su nodo = entra · doppio click sul vuoto = torna · `/` = scrivi · `Ctrl K` = cerca/comandi · `Esc` = chiudi · `T` = tema · `?` = scorciatoie. Sulle conferme: `Y` consenti · `N` nega · `A` consenti per tutta l'esecuzione (le azioni distruttive si confermano solo col click).
 
-**Interfaccia:** intro in cui il cervello si assembla, legenda cliccabile per mostrare/nascondere tipi di nodi, tooltip sui nodi, focus sul vicinato del nodo selezionato, onde d'urto quando un task parte o finisce, nucleo con anelli che accelerano quando l'AI lavora, token/s e grafico dell'attività in tempo reale, command palette, suggerimenti di prompt, qualità grafica regolabile (Alta/Media/Bassa) e animazioni ridotte.
+**Interfaccia:** minimale — solo il cervello e la barra comandi; i controlli si dissolvono quando non muovi il mouse (modalità zen) e lo stato del modello è il puntino sull'icona impostazioni. Intro in cui il cervello si assembla, legenda richiudibile per mostrare/nascondere tipi di nodi, etichette senza sovrapposizioni, tooltip sui nodi, focus sul vicinato del nodo selezionato, onde d'urto quando un task parte o finisce, nucleo con anelli che accelerano quando l'AI lavora, token/s e grafico dell'attività in tempo reale, command palette, suggerimenti di prompt, qualità grafica regolabile (Alta/Media/Bassa) e animazioni ridotte.
 
 **Autonomia** (Impostazioni): per ogni classe di azione scegli `auto`, `chiedi` o `solo rischiosi`. Default: modifiche ai file automatiche (annullabili), eliminazioni e commit su conferma, terminale su conferma tranne build/test/comandi di sola lettura, test automatici.
 
@@ -164,7 +164,7 @@ Tutto in `~/.ai-brain` (configurabile): `brain.json` (progetti, task, ricordi, e
 ## Sviluppo
 
 ```bash
-npm test            # 28 test: unità, provider (server Ollama/OpenAI finti), agente end-to-end, API/WebSocket
+npm test            # 29 test: unità, provider (server Ollama/OpenAI finti), agente end-to-end, API/WebSocket
 npm run typecheck
 npm run build
 ```

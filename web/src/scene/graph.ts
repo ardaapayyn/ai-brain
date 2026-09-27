@@ -364,30 +364,57 @@ export class GraphLayer {
     this.updateLabels(camera);
   }
 
+  /**
+   * DOM labels with collision avoidance: candidates are ranked (hovered/selected/running first,
+   * then projects, then by distance) and placed greedily; a label that would overlap one already
+   * placed stays hidden until you hover its node.
+   */
   private updateLabels(camera: THREE.Camera) {
     const camPos = (camera as THREE.PerspectiveCamera).position;
+    const TYPE_RANK: Record<string, number> = { core: 1, project: 2, task: 3, tool: 4, module: 5, memory: 6 };
+    const candidates: { v: NodeView; rank: number; dist: number; fade: number }[] = [];
     for (const v of this.order) {
       const n = v.node;
       const dist = camPos.distanceTo(v.pos);
-      const important = n.type === 'core' || n.type === 'project' || n.id === this.hovered || n.id === this.selected || n.status === 'running';
+      const hot = n.id === this.hovered || n.id === this.selected || n.status === 'running';
+      const important = hot || n.type === 'core' || n.type === 'project';
       const near = n.type === 'tool' ? dist < 260 : n.type === 'module' || n.type === 'task' ? dist < 170 : dist < 110;
-      const show = v.screen.visible && v.alpha > 0.55 && (important || near);
-      if (!show) {
+      if (!(v.screen.visible && v.alpha > 0.55 && (important || near))) {
         if (v.label) v.label.style.opacity = '0';
         continue;
       }
+      const fade = important ? 1 : Math.max(0, Math.min(1, (n.type === 'tool' ? 260 : n.type === 'memory' ? 110 : 170) / dist - 0.6));
+      candidates.push({ v, rank: hot ? 0 : TYPE_RANK[n.type] ?? 9, dist, fade });
+    }
+    candidates.sort((a, b) => a.rank - b.rank || a.dist - b.dist);
+    const placed: [number, number, number, number][] = [];
+    for (const { v, rank, fade } of candidates) {
+      const n = v.node;
       if (!v.label) {
         v.label = document.createElement('div');
         v.label.className = `node-label t-${n.type}`;
         this.labelsEl.appendChild(v.label);
       }
       const text = n.type === 'tool' ? n.label.toUpperCase() : n.label.length > 48 ? n.label.slice(0, 46) + '…' : n.label;
-      if (v.label.textContent !== text) v.label.textContent = text;
+      if (v.label.textContent !== text) {
+        v.label.textContent = text;
+        (v.label as any)._w = 0;
+      }
+      const w: number = (v.label as any)._w || ((v.label as any)._w = v.label.offsetWidth || text.length * 7);
+      const hgt = n.type === 'project' ? 20 : 15;
+      const x = v.screen.x - w / 2;
+      const y = v.screen.y + 12 + SIZE[n.type] * 0.15;
+      const box: [number, number, number, number] = [x - 4, y - 2, x + w + 4, y + hgt];
+      const hits = placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]);
+      if (hits && rank > 0) {
+        v.label.style.opacity = '0';
+        continue;
+      }
+      placed.push(box);
       v.label.classList.toggle('is-hot', n.id === this.hovered || n.id === this.selected);
       v.label.classList.toggle('is-running', n.status === 'running');
-      const fade = important ? 1 : Math.max(0, Math.min(1, (n.type === 'tool' ? 260 : n.type === 'memory' ? 110 : 170) / dist - 0.6));
       v.label.style.opacity = String(fade);
-      v.label.style.transform = `translate(${v.screen.x.toFixed(1)}px, ${(v.screen.y + 12 + SIZE[n.type] * 0.15).toFixed(1)}px) translateX(-50%)`;
+      v.label.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
     }
   }
 

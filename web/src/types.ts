@@ -90,6 +90,13 @@ export interface Status {
   platform: string;
 }
 
+export interface FolderInfo {
+  path: string;
+  name: string;
+  kind?: string;
+  added?: boolean;
+}
+
 export interface SystemInfo {
   platform: string;
   cpu: string;

@@ -9,10 +9,11 @@ import { ActivityPanel, approvalButtons } from './ui/activity';
 import { CommandBar } from './ui/command';
 import { DetailPanel } from './ui/detail';
 import { h } from './ui/dom';
-import { Banner, HudLeft, HudRight, Legend, OfflineOverlay } from './ui/hud';
+import { Banner, HudRight, Legend, OfflineOverlay } from './ui/hud';
 import { icon } from './ui/icons';
 import { Intro } from './ui/intro';
-import { openAddProject, openSettings, type PullListener, type SettingsOptions } from './ui/modals';
+import { openSettings, type PullListener, type SettingsOptions } from './ui/modals';
+import { openProjectPicker } from './ui/projects';
 import { CommandPalette } from './ui/palette';
 import { mountToasts, toast } from './ui/toast';
 import { NodeTooltip } from './ui/tooltip';
@@ -32,7 +33,6 @@ const CATEGORY_COLOR: Record<string, number> = {
 export class App {
   private ui = document.getElementById('ui')!;
   private scene: BrainScene;
-  private hudLeft: HudLeft;
   private hudRight: HudRight;
   private legend: Legend;
   private banner = new Banner();
@@ -66,15 +66,10 @@ export class App {
     });
     this.scene.graph.setHidden(prefs.hiddenTypes);
 
-    this.hudLeft = new HudLeft(
-      () => this.openSettings('model'),
-      () => this.goHome(),
-    );
     this.hudRight = new HudRight(
       {
         palette: () => this.palette.toggle(),
-        addProject: () => this.addProject(),
-        home: () => this.goHome(),
+        addProjects: () => this.addProject(),
         toggleTheme: () => this.setTheme(state.theme === 'dark' ? 'light' : 'dark'),
         settings: () => this.openSettings(),
       },
@@ -124,7 +119,7 @@ export class App {
       () => ({
         nodes: this.scene.graph.nodes(),
         actions: [
-          { id: 'add', label: 'Collega un progetto', icon: 'plus', run: () => this.addProject() },
+          { id: 'add', label: 'Aggiungi progetti', icon: 'folderPlus', run: () => this.addProject() },
           { id: 'settings', label: 'Impostazioni', icon: 'settings', run: () => this.openSettings() },
           { id: 'model', label: 'Cambia o scarica modello', icon: 'cpu', run: () => this.openSettings('model') },
           { id: 'theme', label: `Tema ${state.theme === 'dark' ? 'chiaro' : 'scuro'}`, icon: state.theme === 'dark' ? 'sun' : 'moon', hint: 'T', run: () => this.setTheme(state.theme === 'dark' ? 'light' : 'dark') },
@@ -138,7 +133,6 @@ export class App {
 
     this.floatApproval.style.display = 'none';
     this.ui.append(
-      this.hudLeft.el,
       this.hudRight.el,
       this.legend.el,
       this.banner.el,
@@ -169,6 +163,7 @@ export class App {
       },
     );
     setInterval(() => this.loadStatus(), 15000);
+    this.bindZen();
     setInterval(() => this.tick(), 100);
     this.boot();
   }
@@ -240,19 +235,22 @@ export class App {
   }
 
   private addProject() {
-    openAddProject(
-      async (p) => {
-        toast(`“${p.name}” collegato — indicizzazione in corso`);
-        this.setProject(p.id);
+    openProjectPicker({
+      toast: (m, e) => toast(m, e ? 'error' : 'ok'),
+      onDone: async (added, existing) => {
+        if (!added.length) {
+          if (existing.length) toast('Quei progetti erano già collegati', 'info');
+          return;
+        }
+        toast(added.length === 1 ? `“${added[0].name}” collegato — indicizzazione in corso` : `${added.length} progetti collegati — indicizzazione in corso`);
         this.welcomeDismissed = true;
+        if (added.length === 1) this.setProject(added[0].id);
         await this.loadGraph();
-        setTimeout(() => {
-          this.scene.wave(p.id, 0xa78bfa);
-          this.selectNode(p.id, true);
-        }, 350);
+        // each new cluster lights up in turn
+        added.forEach((p, i) => setTimeout(() => this.scene.wave(p.id, 0xa78bfa), 350 + i * 260));
+        setTimeout(() => (added.length === 1 ? this.selectNode(added[0].id, true) : this.goHome()), 400);
       },
-      (m, e) => toast(m, e ? 'error' : 'ok'),
-    );
+    });
   }
 
   private goHome() {
@@ -301,14 +299,26 @@ export class App {
     });
   }
 
-  /** 10 Hz: sparkline, tokens/s, command-bar status. */
+  /** Zen mode: secondary controls dissolve after a few seconds without mouse/keyboard activity. */
+  private bindZen() {
+    let timer = 0;
+    const wake = () => {
+      document.body.classList.remove('zen');
+      clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const busy = !!this.ui.querySelector('.backdrop, .palette-wrap, .menu') || document.activeElement?.tagName === 'INPUT';
+        if (!busy) document.body.classList.add('zen');
+      }, 4500);
+    };
+    for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel']) window.addEventListener(ev, wake, { passive: true });
+    wake();
+  }
+
+  /** 10 Hz: tokens/s and command-bar status. */
   private tick() {
     const now = performance.now();
     while (this.tokenTimes.length && now - this.tokenTimes[0] > 1500) this.tokenTimes.shift();
     const tps = this.tokenTimes.length > 2 ? this.tokenTimes.length / 1.5 : undefined;
-    const busy = [...state.runs.values()].some((r) => r.status === 'running');
-    this.hudLeft.pushActivity(this.scene.activityLevel, state.theme === 'dark' ? '#a78bfa' : '#7c3aed');
-    this.hudLeft.setMetric(tps, !state.connected ? '—' : busy ? 'al lavoro' : 'in attesa');
     this.command.setRun(this.contextRun(), tps);
     if (this.activity.tps !== tps) {
       this.activity.tps = tps;
@@ -330,7 +340,7 @@ export class App {
   private renderStatus() {
     const s = state.status;
     const busy = [...state.runs.values()].some((r) => r.status === 'running');
-    this.hudLeft.setStatus({ connected: state.connected, ok: !!s?.llm.ok, model: s?.model, busy });
+    this.hudRight.setStatus({ connected: state.connected, ok: !!s?.llm.ok, model: s?.model, busy });
     if (!state.connected || !s) return this.banner.hide();
     if (this.pullState) {
       const p = this.pullState;

@@ -7,6 +7,7 @@ import type { EventBus } from '../events.js';
 import type { LLMRouter } from '../llm/router.js';
 import type { MemoryKind, MemoryStore } from '../memory/store.js';
 import type { Orchestrator } from '../agent/orchestrator.js';
+import { browse, discoverProjects, fsRoots } from '../workspace/discover.js';
 import { renderOverview } from '../workspace/indexer.js';
 import { systemInfo } from '../system.js';
 import { buildGraph } from './graph.js';
@@ -155,18 +156,64 @@ export function createServer(deps: ServerDeps) {
 
   // ── projects ────────────────────────────────────────────────
   route('GET', '/api/projects', () => memory.listProjects());
-  route('POST', '/api/projects', async (_r, _p, body) => {
-    const raw = String(body?.path ?? '').trim();
-    if (!raw) throw new HttpError(400, 'path is required');
-    const abs = path.resolve(raw.replace(/^~(?=$|[\\/])/, process.env.HOME ?? process.env.USERPROFILE ?? '~'));
+  const home = () => process.env.HOME ?? process.env.USERPROFILE ?? '~';
+  /** Connect a folder as a project (idempotent). Indexing runs in the background. */
+  function addProjectPath(raw: string, name?: string, description?: string) {
+    const trimmed = raw.trim();
+    if (!trimmed) throw new HttpError(400, 'path is required');
+    const abs = path.resolve(trimmed.replace(/^~(?=$|[\\/])/, home()));
     if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) throw new HttpError(400, `Not a folder: ${abs}`);
     const existing = memory.findProjectByPath(abs);
-    if (existing) return existing;
-    const p = memory.addProject({ name: String(body?.name ?? '').trim() || path.basename(abs), path: abs, description: body?.description });
+    if (existing) return { project: existing, created: false };
+    const p = memory.addProject({ name: name?.trim() || path.basename(abs) || abs, path: abs, description });
     orchestrator.getIndex(p.id).then(() => bus.emitEvent({ type: 'graph.changed' })).catch(() => {});
+    return { project: p, created: true };
+  }
+
+  route('POST', '/api/projects', async (_r, _p, body) => {
+    const { project } = addProjectPath(String(body?.path ?? ''), body?.name ? String(body.name) : undefined, body?.description);
     bus.emitEvent({ type: 'graph.changed' });
-    return p;
+    return project;
   });
+
+  // Connect many folders at once (multi-select picker / auto-discovery).
+  route('POST', '/api/projects/bulk', (_r, _p, body) => {
+    const paths: unknown[] = Array.isArray(body?.paths) ? body.paths.slice(0, 500) : [];
+    if (!paths.length) throw new HttpError(400, 'paths must be a non-empty array');
+    const added: unknown[] = [];
+    const existing: unknown[] = [];
+    const failed: { path: string; error: string }[] = [];
+    for (const raw of paths) {
+      try {
+        const r = addProjectPath(String(raw));
+        (r.created ? added : existing).push(r.project);
+      } catch (err: any) {
+        failed.push({ path: String(raw), error: err.message });
+      }
+    }
+    bus.emitEvent({ type: 'graph.changed' });
+    return { added, existing, failed };
+  });
+
+  // Folder browser for the picker: sub-folders with detected project type.
+  route('GET', '/api/fs/browse', async (_r, _p, _b, url) => {
+    const q = url.searchParams.get('path');
+    try {
+      const res = await browse(q ? q.replace(/^~(?=$|[\\/])/, home()) : home());
+      const known = new Set(memory.listProjects().map((p) => path.resolve(p.path).toLowerCase()));
+      return { ...res, roots: fsRoots(), folders: res.folders.map((f) => ({ ...f, added: known.has(path.resolve(f.path).toLowerCase()) })) };
+    } catch (err: any) {
+      throw new HttpError(400, `Impossibile aprire la cartella: ${err.code ?? err.message}`);
+    }
+  });
+
+  // Auto-discovery of project folders in the usual places.
+  route('GET', '/api/fs/discover', async () => {
+    const res = await discoverProjects();
+    const known = new Set(memory.listProjects().map((p) => path.resolve(p.path).toLowerCase()));
+    return { ...res, projects: res.projects.map((f) => ({ ...f, added: known.has(path.resolve(f.path).toLowerCase()) })) };
+  });
+
   route('GET', '/api/projects/:id', async (_r, { id }) => {
     const p = memory.getProject(id);
     if (!p) throw new HttpError(404, 'Project not found');

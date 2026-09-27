@@ -102,3 +102,45 @@ test('API: settings validation', async () => {
   assert.equal(data.agent.maxSteps, 12);
   server.close();
 });
+
+test('API: discover projects, browse folders, bulk-connect many folders', async () => {
+  const home = tmpDir('brain-home-');
+  const mk = (rel: string, files: string[]) => {
+    fs.mkdirSync(path.join(home, rel), { recursive: true });
+    for (const f of files) {
+      const p = path.join(home, rel, f);
+      if (f.endsWith('/')) fs.mkdirSync(p, { recursive: true });
+      else fs.writeFileSync(p, '{}');
+    }
+  };
+  mk('Documents/Unity Projects/Arena', ['Assets/', 'ProjectSettings/']);
+  mk('Projects/web-shop', ['package.json']);
+  mk('Projects/web-shop/node_modules/dep', ['package.json']); // must not be reported
+  mk('dev/tool', ['Cargo.toml']);
+  mk('Pictures/holiday', ['.git/']); // skipped folder
+  const prevHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const { server, call } = await boot([() => ({ content: 'hi' })]);
+    const { data: disc } = await call('GET', '/api/fs/discover');
+    const byName = Object.fromEntries(disc.projects.map((p: any) => [p.name, p.kind]));
+    assert.deepEqual(byName, { Arena: 'Unity', tool: 'Rust', 'web-shop': 'Node.js' });
+
+    const { data: br } = await call('GET', `/api/fs/browse?path=${encodeURIComponent(path.join(home, 'Projects'))}`);
+    assert.deepEqual(br.folders.map((f: any) => [f.name, f.kind]), [['web-shop', 'Node.js']]);
+    assert.ok(br.roots.length >= 2);
+
+    const paths = disc.projects.map((p: any) => p.path);
+    const { data: bulk } = await call('POST', '/api/projects/bulk', { paths: [...paths, path.join(home, 'nope')] });
+    assert.equal(bulk.added.length, 3);
+    assert.equal(bulk.failed.length, 1);
+    const { data: again } = await call('POST', '/api/projects/bulk', { paths });
+    assert.equal(again.added.length, 0);
+    assert.equal(again.existing.length, 3);
+    const { data: disc2 } = await call('GET', '/api/fs/discover');
+    assert.ok(disc2.projects.every((p: any) => p.added));
+    server.close();
+  } finally {
+    process.env.HOME = prevHome;
+  }
+});
